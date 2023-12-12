@@ -16,8 +16,14 @@ WiFiUDP udpNR;
 
 IPAddress broadcastIP;
 
-#define ADC_PIN1 35		// GPIO 35 = A7, uses any valid Ax pin as you wish
-#define ADC_PIN2 34		// GPIO 35 = A7, uses any valid Ax pin as you wish
+#define DHT_PIN 		4	
+#define COLDFAN_PIN 	21
+#define HOTFAN_PIN 		19
+#define PELTIER_PIN 	17
+#define TEMPHOT_PIN 	34		// GPIO 34 = A?, uses any valid Ax pin as you wish
+#define TEMPCOLD_PIN 	35		// GPIO 35 = A7, uses any valid Ax pin as you wish
+#define TEMPOUT_PIN 	32
+
 #define R1 100000		// voltage divider resistor value
 #define BETA 3950.0		// Beta value
 #define T0 298.15		// Temperature in Kelvin for 25 degree Celsius
@@ -25,8 +31,25 @@ IPAddress broadcastIP;
 #define ADCMAX 4095		// Résolution MAX
 #define VSS 3.3			// Tension MAX
 
-SimpleKalmanFilter simpleKalmanFilter1(0.5, 0.5, 0.01);
-SimpleKalmanFilter simpleKalmanFilter2(0.5, 0.5, 0.01);
+SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
+SimpleKalmanFilter simpleKalmanFilterCold(0.5, 0.5, 0.01);
+SimpleKalmanFilter simpleKalmanFilterOut(0.5, 0.5, 0.01);
+
+bool coldFanOn = false;
+bool hotFanOn = false;
+bool peltierOn = false;
+bool pushJSON = false;
+
+TempAndHumidity tempAndHum;
+float tempCold;
+float tempHot;
+float tempOut;
+float memTemperature = 0;
+float memHumidity = 0;
+float memTempCold = 0;
+float memTempHot = 0;
+float memTempOut = 0;
+
 
 const float ADC_LUT[4096] = { 0,
 81.0000,86.8000,92.0000,96.6000,97.8000,98.8000,99.8000,101.0000,102.0000,103.0000,104.2000,105.4000,106.6000,107.8000,108.8000,
@@ -332,10 +355,50 @@ float readTemp(uint8_t pin){
 	return Tc;
 }
 
+
+void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
+	//DEBUGLOG("Receive %d car %.*s\n", len, len, (char*)data);
+	switch (((char*)data)[0]){
+		case 'C':
+		case 'c':
+			coldFanOn = !coldFanOn;
+			digitalWrite(COLDFAN_PIN, coldFanOn);
+			DEBUGLOG("Cold fan : %s\r\n",coldFanOn?"On":"Off");
+			break;
+		case 'H':
+		case 'h':
+			hotFanOn = !hotFanOn;
+			digitalWrite(HOTFAN_PIN, hotFanOn);
+			DEBUGLOG("Hot fan : %s\r\n",hotFanOn?"On":"Off");
+			break;
+		case 'P':
+		case 'p':
+			peltierOn = !peltierOn;
+			digitalWrite(PELTIER_PIN, peltierOn);
+			DEBUGLOG("Peltier : %s\r\n",peltierOn?"On":"Off");
+			break;
+		case 'D':
+		case 'd':
+			DEBUGLOG("temperature:%3.1f\r\nhumidity:%3.1f\r\ntempCold:%3.1f\r\ntempHot:%3.1f\r\ntempOut:%3.1f\r\nDHT status:%s\r\n", tempAndHum.temperature, tempAndHum.humidity, tempCold, tempHot, tempOut, dht.getStatusString());
+			break;
+		case 'J':
+		case 'j':
+			pushJSON = true;
+			break;
+		case '?':
+			DEBUGLOG("?        Help\r\n");
+			DEBUGLOG("C        Cold fan swap\r\n");
+			DEBUGLOG("H        Hot fan swap\r\n");
+			DEBUGLOG("P        Peltier swap\r\n");
+			DEBUGLOG("D        Display\r\n");
+			DEBUGLOG("J        Push JSON\r\n");
+	}
+}
+
 void setup() {
 	
 	DEBUGINIT();
-	
+	DEBUGSETDATAHANDLER(onReceiveDebug);
 	loadIP();
 	WiFi.begin();
 
@@ -373,49 +436,56 @@ void setup() {
 	udpNR.begin(PORTNR);
 
 	ArduinoOTA.begin();
-	dht.setup(4, DHTesp::DHT22);  // Connect DHT sensor to GPIO 4
 
-    dac_output_enable(DAC_CHANNEL_1);    // pin 25
-    dac_output_voltage(DAC_CHANNEL_1, 0);
-    analogReadResolution(12);
+	// Init pin
+	pinMode(COLDFAN_PIN, OUTPUT);
+	digitalWrite(COLDFAN_PIN, coldFanOn);
+	pinMode(HOTFAN_PIN, OUTPUT);
+	digitalWrite(HOTFAN_PIN, hotFanOn);
+	pinMode(PELTIER_PIN, OUTPUT);
+	digitalWrite(PELTIER_PIN, peltierOn);
+	dht.setup(DHT_PIN, DHTesp::DHT22);  // Connect DHT sensor to GPIO 4
+	
+    // dac_output_enable(DAC_CHANNEL_1);    // pin 25
+    // dac_output_voltage(DAC_CHANNEL_1, 0);
+    // analogReadResolution(12);
 }
 
-// char buffer [20];
-char buffer [100];
-float memTemperature = 0;
-float memHumidity = 0;
+char buffer [200];
 uint32_t memMillis = 0;
 uint8_t output = 125;
 
 void loop() {
-	// output++;
-	// dac_output_voltage(DAC_CHANNEL_1, output);
-	// delayMicroseconds(100);
+	float tempColdRaw = readTemp(TEMPCOLD_PIN);
+	float tempHotRaw = readTemp(TEMPHOT_PIN);
+	float tempOutRaw = readTemp(TEMPOUT_PIN);
+	
+	tempCold = simpleKalmanFilterCold.updateEstimate(tempColdRaw);
+	tempHot = simpleKalmanFilterHot.updateEstimate(tempHotRaw);
+	tempOut = simpleKalmanFilterOut.updateEstimate(tempOutRaw);
 
-	// DEBUGLOG(">Consigne:%1.3f\n>Mesure1:%1.3f\n>Mesure2:%1.3f\n",output*16*3.3/4096, mesureVal(ADC_PIN1)*3.3/4096, mesureVal(ADC_PIN2)*3.3/4096);
-	// DEBUGLOG(">Consigne:%3.1f\n>RAW:%d\n>Mesure:%3.1f\n",output*16*3.3, val, ADC_LUT[val]);1
-	float tempRaw1 = readTemp(ADC_PIN1);
-	float tempRaw2 = readTemp(ADC_PIN2);
-	float temp1 = simpleKalmanFilter1.updateEstimate(tempRaw1);
-	float temp2 = simpleKalmanFilter2.updateEstimate(tempRaw2);
+	tempAndHum = dht.getTempAndHumidity();
 
-	DEBUGLOG(">TempRaw1:%3.3f\n>TempRaw2:%3.3f\n>Temp1:%3.3f\n>Temp2:%3.3f\n",tempRaw1, tempRaw2, temp1, temp2 );
-
-	if (millis() - memMillis>300000){	
-	// delay(dht.getMinimumSamplingPeriod());
-		TempAndHumidity tempAndHum = dht.getTempAndHumidity();
-		if (dht.getStatus() == DHTesp::DHT_ERROR_t::ERROR_NONE){
-			DEBUGLOG("*");
-			memMillis = millis();
-			memHumidity = tempAndHum.humidity;
-			memTemperature = tempAndHum.temperature;
-			sprintf(buffer, "{\"temperature\":%3.1f,\"humidity\":%3.1f,\"temp1\":%3.1f,\"temp2\":%3.1f}\0", round(tempAndHum.temperature*10)/10, round(tempAndHum.humidity*10)/10, temp1, temp2);
-			udpNR.beginPacket(broadcastIP, PORTNR);
-			udpNR.print(buffer);
-			udpNR.endPacket();
-		}
-		else 
-			DEBUGLOG("E %d",dht.getStatus());
+	if (millis() - memMillis>300000 || pushJSON){
+		memMillis = millis();
+		pushJSON = false;
+		memHumidity = tempAndHum.humidity;
+		memTemperature = tempAndHum.temperature;
+		memTempCold = tempCold;
+		memTempHot = tempHot;
+		memTempOut = tempOut;
+		sprintf(buffer, "{\"temperature\":%3.1f,\"humidity\":%3.1f,\"absHumidity\":%3.1f,\"dewPoint\":%3.1f,\"DHTstatus\":\"%s\",\"tempCold\":%3.1f,\"tempHot\":%3.1f,\"tempOut\":%3.1f}\0", 
+						tempAndHum.temperature, 
+						tempAndHum.humidity, 
+						dht.computeAbsoluteHumidity(tempAndHum.temperature,tempAndHum.humidity),
+						dht.computeDewPoint(tempAndHum.temperature,tempAndHum.humidity),
+						dht.getStatusString(),
+						tempCold, 
+						tempHot, 
+						tempOut );
+		udpNR.beginPacket(broadcastIP, PORTNR);
+		udpNR.print(buffer);
+		udpNR.endPacket();
 	}
 	ArduinoOTA.handle();
 	delay(1000);	
