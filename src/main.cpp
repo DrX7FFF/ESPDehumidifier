@@ -31,15 +31,23 @@ IPAddress broadcastIP;
 #define COLDFAN_SPEEDMIN 18
 #define COLDFAN_SPEEDSTART 24
 
+#define DELAY_UPDONW 30000
+#define DELAY_STOP 600000
+
 SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterCold(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterOut(0.5, 0.5, 0.01);
 
 uint8_t coldFanSpeed = 0;
-bool coldFanOn = false;
 bool hotFanOn = false;
 bool peltierOn = false;
 bool pushJSON = false;
+bool forceDisplay = false;
+
+uint32_t memMillisStop = 0;
+uint32_t memMillisDown = 0;
+uint32_t memMillisUp = 0;
+
 
 TempAndHumidity tempAndHum;
 float tempCold;
@@ -372,7 +380,7 @@ void setPeltier(bool cmd){
 }
 
 void display(){
-	DEBUGLOG("temperature:%3.1f\r\nhumidity:%3.1f\r\ntempCold:%3.1f\r\ntempHot:%3.1f\r\ntempOut:%3.1f\r\nhumidity abs:%3.1f\r\ndew point:%3.1f\r\ncold speed:%d\r\n\r\n", 
+	DEBUGLOG("temperature:%3.1f\r\nhumidity:%3.1f\r\ntempCold:%3.1f\r\ntempHot:%3.1f\r\ntempOut:%3.1f\r\nhumidity abs:%3.1f\r\ndew point:%3.1f\r\ncold speed:%d\r\nTimer STOP (%d min.):%d\r\nTimer DOWN (%d):%d\r\nTimer UP (%d):%d\r\n\r\n", 
 	tempAndHum.temperature, 
 	tempAndHum.humidity, 
 	tempCold, 
@@ -380,7 +388,13 @@ void display(){
 	tempOut,
 	dht.computeAbsoluteHumidity(tempAndHum.temperature,tempAndHum.humidity),
 	tempDewPoint,
-	coldFanSpeed );
+	coldFanSpeed,
+	DELAY_STOP/60000,
+	(millis()-memMillisStop) / 60000,
+	DELAY_UPDONW/1000,
+	(millis()-memMillisDown) / 1000,
+	DELAY_UPDONW/1000,
+	(millis()-memMillisUp) / 1000);
 }
 
 void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
@@ -399,7 +413,7 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
 			break;
 		case 'D':
 		case 'd':
-			display();
+			forceDisplay = true;
 			break;
 		case 'J':
 		case 'j':
@@ -432,6 +446,7 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
 			DEBUGLOG("C        Cold fan swap\r\n");
 			DEBUGLOG("+        Cold Up\r\n");
 			DEBUGLOG("-        Cold Down\r\n");
+
 			DEBUGLOG("Cold speed : %d\r\n",coldFanSpeed);
 	}
 }
@@ -478,14 +493,14 @@ void setup() {
 	ArduinoOTA.begin();
 
 	// Init pin
-	pinMode(COLDFAN_PIN, OUTPUT);
-	digitalWrite(COLDFAN_PIN, coldFanOn);
 	pinMode(HOTFAN_PIN, OUTPUT);
 	digitalWrite(HOTFAN_PIN, hotFanOn);
 	pinMode(PELTIER_PIN, OUTPUT);
 	digitalWrite(PELTIER_PIN, peltierOn);
 	dht.setup(DHT_PIN, DHTesp::DHT22);  // Connect DHT sensor to GPIO 4
 	
+	pinMode(COLDFAN_PIN, OUTPUT);
+	digitalWrite(COLDFAN_PIN, false);
 	ledcSetup(0,100000,5);
 	ledcAttachPin(COLDFAN_PIN,0);
 	ledcWrite(0,coldFanSpeed);
@@ -496,9 +511,7 @@ void setup() {
 
 char buffer [200];
 uint32_t memMillis = 0;
-uint32_t memMillisFanCold = 0;
 uint32_t memMillisDisplay = 0;
-uint32_t memMillisDewPoint = 0;
 
 void loop() {
 	// Read values
@@ -511,24 +524,33 @@ void loop() {
 	// Automatic Hot Fan
 	digitalWrite(HOTFAN_PIN, peltierOn || (tempHot>tempAndHum.temperature + 5));
 	
-	bool forceDisplay = false;
 	if (peltierOn){ // MEttre TempCold < tempDewPoint + Ajouter temporisation pour évacuer gouttes
-		if (coldFanSpeed == 0)
+		if (coldFanSpeed == 0){
 			coldFanSpeed = COLDFAN_SPEEDSTART;
-
+			memMillisDown = millis();	// Si au dessus du DewPoint, réduire vitesse
+			memMillisUp = millis();
+			memMillisStop = millis();	//Temporise l'arrêt si Out>DewPoint
+		}
 		else {
-			if (tempOut > tempDewPoint -1)
-				forceDisplay = fanColdDown();
-			if (tempOut > tempDewPoint -2)
-				memMillisFanCold = millis();
-			if (millis() - memMillisFanCold>30000) {
-				memMillisFanCold = millis();
+			if (tempOut < (tempDewPoint -1)){
+				memMillisDown = millis();	// Si au dessus du DewPoint, réduire vitesse
+				memMillisStop = millis();	// Si en dessous du DewPoint, Temporise l'arrêt
+			}
+
+			if (tempOut > (tempDewPoint -2))	// Si très bas en sortie pendant 30s alors accéler circulation
+				memMillisUp = millis();
+
+			if (millis() - memMillisDown>DELAY_UPDONW){
+				memMillisDown = millis();
+				forceDisplay = fanColdDown();	// Si au dessus du DewPoint, réduire vitesse
+			}
+			if (millis() - memMillisUp>DELAY_UPDONW) {
+				memMillisUp = millis();
 				forceDisplay = fanColdUp();
 			}
 		}
-		if (tempOut<tempDewPoint)
-			memMillisDewPoint = millis();
-		if (millis() - memMillisDewPoint>900000) // 15 min
+
+		if (millis() - memMillisStop>DELAY_STOP) // si 15 min au dessus du DewPoint alors arrêt
 			setPeltier(false);
 	}
 	else {
