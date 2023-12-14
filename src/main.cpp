@@ -35,6 +35,7 @@ SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterCold(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterOut(0.5, 0.5, 0.01);
 
+uint8_t coldFanSpeed = 0;
 bool coldFanOn = false;
 bool hotFanOn = false;
 bool peltierOn = false;
@@ -44,12 +45,14 @@ TempAndHumidity tempAndHum;
 float tempCold;
 float tempHot;
 float tempOut;
+float tempDewPoint;
+
 float memTemperature = 0;
 float memHumidity = 0;
 float memTempCold = 0;
 float memTempHot = 0;
 float memTempOut = 0;
-
+bool cmdOn = false;
 
 const float ADC_LUT[4096] = { 0,
 81.0000,86.8000,92.0000,96.6000,97.8000,98.8000,99.8000,101.0000,102.0000,103.0000,104.2000,105.4000,106.6000,107.8000,108.8000,
@@ -355,16 +358,50 @@ float readTemp(uint8_t pin){
 	return Tc;
 }
 
+bool fanColdUp(){
+	uint8_t mem = coldFanSpeed;
+	if 	(coldFanSpeed == 0)
+		coldFanSpeed = 20;
+	else
+		if (coldFanSpeed < 0x1F)
+			coldFanSpeed = coldFanSpeed + 1;
+	ledcWrite(0,coldFanSpeed);
+	return (coldFanSpeed != mem);
+}
+
+bool fanColdDown(){
+	uint8_t mem = coldFanSpeed;
+	if (coldFanSpeed>20)
+		coldFanSpeed = coldFanSpeed - 1;
+	ledcWrite(0,coldFanSpeed);
+	return (coldFanSpeed != mem);
+}
+
+void fanColdStop(){
+	coldFanSpeed = 0;
+	ledcWrite(0,coldFanSpeed);
+}
+
+void display(){
+	DEBUGLOG("temperature:%3.1f\r\nhumidity:%3.1f\r\ntempCold:%3.1f\r\ntempHot:%3.1f\r\ntempOut:%3.1f\r\nhumidity abs:%3.1f\r\ndew point:%3.1f\r\ncold speed:%d\r\n\r\n", 
+	tempAndHum.temperature, 
+	tempAndHum.humidity, 
+	tempCold, 
+	tempHot,
+	tempOut,
+	dht.computeAbsoluteHumidity(tempAndHum.temperature,tempAndHum.humidity),
+	tempDewPoint,
+	coldFanSpeed );
+}
 
 void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
 	//DEBUGLOG("Receive %d car %.*s\n", len, len, (char*)data);
 	switch (((char*)data)[0]){
-		case 'C':
-		case 'c':
-			coldFanOn = !coldFanOn;
-			digitalWrite(COLDFAN_PIN, coldFanOn);
-			DEBUGLOG("Cold fan : %s\r\n",coldFanOn?"On":"Off");
-			break;
+		// case 'O':
+		// case 'o':
+		// 	cmdOn = ! cmdOn;
+		// 	DEBUGLOG("On : %s\r\n",cmdOn?"On":"Off");
+		// 	break;
 		case 'H':
 		case 'h':
 			hotFanOn = !hotFanOn;
@@ -379,19 +416,43 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
 			break;
 		case 'D':
 		case 'd':
-			DEBUGLOG("temperature:%3.1f\r\nhumidity:%3.1f\r\ntempCold:%3.1f\r\ntempHot:%3.1f\r\ntempOut:%3.1f\r\nDHT status:%s\r\n", tempAndHum.temperature, tempAndHum.humidity, tempCold, tempHot, tempOut, dht.getStatusString());
+			display();
 			break;
 		case 'J':
 		case 'j':
 			pushJSON = true;
 			break;
+		case 'C':
+		case 'c':
+			// coldFanOn = !coldFanOn;
+			// digitalWrite(COLDFAN_PIN, coldFanOn);
+			// DEBUGLOG("Cold fan : %s\r\n",coldFanOn?"On":"Off");
+			if (coldFanSpeed)
+				coldFanSpeed = 0;
+			else 
+				coldFanSpeed = 0x1F;
+			ledcWrite(0,coldFanSpeed);
+			DEBUGLOG("Cold speed : %d\r\n",coldFanSpeed);
+			break;
+			break;
+		case '+':
+			fanColdUp();
+			DEBUGLOG("Cold speed : %d\r\n",coldFanSpeed);
+			break;
+		case '-':
+			fanColdDown();
+			DEBUGLOG("Cold speed : %d\r\n",coldFanSpeed);
+			break;
 		case '?':
 			DEBUGLOG("?        Help\r\n");
-			DEBUGLOG("C        Cold fan swap\r\n");
 			DEBUGLOG("H        Hot fan swap\r\n");
 			DEBUGLOG("P        Peltier swap\r\n");
 			DEBUGLOG("D        Display\r\n");
 			DEBUGLOG("J        Push JSON\r\n");
+			DEBUGLOG("C        Cold fan swap\r\n");
+			DEBUGLOG("+        Cold Up\r\n");
+			DEBUGLOG("-        Cold Down\r\n");
+			DEBUGLOG("Cold speed : %d\r\n",coldFanSpeed);
 	}
 }
 
@@ -446,6 +507,9 @@ void setup() {
 	digitalWrite(PELTIER_PIN, peltierOn);
 	dht.setup(DHT_PIN, DHTesp::DHT22);  // Connect DHT sensor to GPIO 4
 	
+	ledcSetup(0,100000,5);
+	ledcAttachPin(COLDFAN_PIN,0);
+	ledcWrite(0,coldFanSpeed);
     // dac_output_enable(DAC_CHANNEL_1);    // pin 25
     // dac_output_voltage(DAC_CHANNEL_1, 0);
     // analogReadResolution(12);
@@ -454,6 +518,8 @@ void setup() {
 char buffer [200];
 uint32_t memMillis = 0;
 uint8_t output = 125;
+uint32_t memMillisFanCold = 0;
+uint32_t memMillisDisplay = 0;
 
 void loop() {
 	float tempColdRaw = readTemp(TEMPCOLD_PIN);
@@ -465,6 +531,58 @@ void loop() {
 	tempOut = simpleKalmanFilterOut.updateEstimate(tempOutRaw);
 
 	tempAndHum = dht.getTempAndHumidity();
+
+	tempDewPoint = dht.computeDewPoint(tempAndHum.temperature,tempAndHum.humidity);
+
+
+	digitalWrite(HOTFAN_PIN, peltierOn || (tempHot>tempAndHum.temperature + 5));
+		
+	// if (millis() - memMillisFanCold>60000){
+	// 	memMillisFanCold = millis();
+	// 	if (peltierOn){
+	// 		if (coldFanSpeed == 0)
+	// 			coldFanSpeed = 20;
+	// 		else {
+	// 			if (tempOut > tempDewPoint -2)
+	// 				fanColdDown();
+	// 			if (tempOut < tempDewPoint -3)
+	// 				fanColdUp();
+	// 		}
+	// 	}
+	// 	else {
+	// 		if (tempOut > tempDewPoint)
+	// 			fanColdStop();
+	// 	}
+		
+	// 	display();
+	// }
+
+	bool forceDisplay = false;
+	if (peltierOn){
+		if (coldFanSpeed == 0)
+			coldFanSpeed = 20;
+
+		else {
+			if (millis() - memMillisFanCold>30000) {
+				memMillisFanCold = millis();
+				if (tempOut > tempDewPoint -2)
+					forceDisplay = fanColdDown();
+				if (tempOut < tempDewPoint -3)
+					forceDisplay = fanColdUp();
+			}
+		}
+	}
+	else {
+		if (tempOut > tempDewPoint)
+			fanColdStop();
+	}
+
+	if ((millis() - memMillisDisplay>60000) || forceDisplay) {
+		memMillisDisplay = millis();
+		display();
+		forceDisplay = false;
+	}
+
 
 	if (millis() - memMillis>300000 || pushJSON){
 		memMillis = millis();
@@ -478,7 +596,7 @@ void loop() {
 						tempAndHum.temperature, 
 						tempAndHum.humidity, 
 						dht.computeAbsoluteHumidity(tempAndHum.temperature,tempAndHum.humidity),
-						dht.computeDewPoint(tempAndHum.temperature,tempAndHum.humidity),
+						tempDewPoint,
 						dht.getStatusString(),
 						tempCold, 
 						tempHot, 
