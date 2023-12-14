@@ -9,11 +9,8 @@
 
 DHTesp dht;
 
-WiFiUDP udpTeleplot;
-#define PORTTELEPLOT 47269
 WiFiUDP udpNR;
 #define PORTNR 8888
-
 IPAddress broadcastIP;
 
 #define DHT_PIN 		4	
@@ -50,12 +47,11 @@ float tempHot;
 float tempOut;
 float tempDewPoint;
 
-float memTemperature = 0;
-float memHumidity = 0;
-float memTempCold = 0;
-float memTempHot = 0;
-float memTempOut = 0;
-bool cmdOn = false;
+// float memTemperature = 0;
+// float memHumidity = 0;
+// float memTempCold = 0;
+// float memTempHot = 0;
+// float memTempOut = 0;
 
 const float ADC_LUT[4096] = { 0,
 81.0000,86.8000,92.0000,96.6000,97.8000,98.8000,99.8000,101.0000,102.0000,103.0000,104.2000,105.4000,106.6000,107.8000,108.8000,
@@ -333,26 +329,9 @@ const float ADC_LUT[4096] = { 0,
 4030.6001,4031.0000,4031.8000,4032.0000,4033.6001,4035.0000,4036.2000,4037.8000,4039.0000,4040.6001,4042.0000,4043.2000,4044.8000,4046.0000,4047.60
 };
 
-float mesureVal(uint8_t pin){
-	uint16_t buffer[13];
-	for(uint8_t ind= 0; ind<ARRAY_LENGTH(buffer); ind++){
-		uint16_t v = analogRead(pin);
-		uint8_t i = ind;
-		while (i>0 && buffer[i-1]>v){
-			buffer[i] = buffer[i-1];
-			i--;
-		}
-		buffer[i] = v;
-	}
-	return ADC_LUT[buffer[(uint8_t)ARRAY_LENGTH(buffer)/2]];
-}
-
-float mesureValSimple(uint8_t pin){
-	return ADC_LUT[analogRead(pin)];
-}
 
 float readTemp(uint8_t pin){
-	float adc = mesureValSimple(pin);
+	float adc = ADC_LUT[analogRead(pin)];
 	float Vout = adc * VSS/ADCMAX;
   	float Rt = R1 * Vout / (VSS - Vout);
 
@@ -385,6 +364,13 @@ void fanColdStop(){
 	ledcWrite(0,coldFanSpeed);
 }
 
+void setPeltier(bool cmd){
+	if (cmd == peltierOn)
+		return;
+	peltierOn = cmd;
+	digitalWrite(PELTIER_PIN, peltierOn);
+}
+
 void display(){
 	DEBUGLOG("temperature:%3.1f\r\nhumidity:%3.1f\r\ntempCold:%3.1f\r\ntempHot:%3.1f\r\ntempOut:%3.1f\r\nhumidity abs:%3.1f\r\ndew point:%3.1f\r\ncold speed:%d\r\n\r\n", 
 	tempAndHum.temperature, 
@@ -400,11 +386,6 @@ void display(){
 void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
 	//DEBUGLOG("Receive %d car %.*s\n", len, len, (char*)data);
 	switch (((char*)data)[0]){
-		// case 'O':
-		// case 'o':
-		// 	cmdOn = ! cmdOn;
-		// 	DEBUGLOG("On : %s\r\n",cmdOn?"On":"Off");
-		// 	break;
 		case 'H':
 		case 'h':
 			hotFanOn = !hotFanOn;
@@ -413,8 +394,7 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
 			break;
 		case 'P':
 		case 'p':
-			peltierOn = !peltierOn;
-			digitalWrite(PELTIER_PIN, peltierOn);
+			setPeltier(!peltierOn);
 			DEBUGLOG("Peltier : %s\r\n",peltierOn?"On":"Off");
 			break;
 		case 'D':
@@ -427,9 +407,6 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len){
 			break;
 		case 'C':
 		case 'c':
-			// coldFanOn = !coldFanOn;
-			// digitalWrite(COLDFAN_PIN, coldFanOn);
-			// DEBUGLOG("Cold fan : %s\r\n",coldFanOn?"On":"Off");
 			if (coldFanSpeed)
 				coldFanSpeed = 0;
 			else 
@@ -496,7 +473,6 @@ void setup() {
 		broadcastIP[i] = (myIP[i] & myMask[i]) | (~myMask[i]);
 	DEBUGLOG("\nIPLocal %s\nMask %s\nBroadCast %s\n", myIP.toString().c_str(),myMask.toString().c_str(),broadcastIP.toString().c_str());
 
-	// udpTeleplot.begin(PORTTELEPLOT);
 	udpNR.begin(PORTNR);
 
 	ArduinoOTA.begin();
@@ -520,60 +496,40 @@ void setup() {
 
 char buffer [200];
 uint32_t memMillis = 0;
-uint8_t output = 125;
 uint32_t memMillisFanCold = 0;
 uint32_t memMillisDisplay = 0;
+uint32_t memMillisDewPoint = 0;
 
 void loop() {
-	float tempColdRaw = readTemp(TEMPCOLD_PIN);
-	float tempHotRaw = readTemp(TEMPHOT_PIN);
-	float tempOutRaw = readTemp(TEMPOUT_PIN);
-	
-	tempCold = simpleKalmanFilterCold.updateEstimate(tempColdRaw);
-	tempHot = simpleKalmanFilterHot.updateEstimate(tempHotRaw);
-	tempOut = simpleKalmanFilterOut.updateEstimate(tempOutRaw);
-
+	// Read values
+	tempCold = simpleKalmanFilterCold.updateEstimate(readTemp(TEMPCOLD_PIN));
+	tempHot = simpleKalmanFilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
+	tempOut = simpleKalmanFilterOut.updateEstimate(readTemp(TEMPOUT_PIN));
 	tempAndHum = dht.getTempAndHumidity();
-
 	tempDewPoint = dht.computeDewPoint(tempAndHum.temperature,tempAndHum.humidity);
 
-
+	// Automatic Hot Fan
 	digitalWrite(HOTFAN_PIN, peltierOn || (tempHot>tempAndHum.temperature + 5));
-		
-	// if (millis() - memMillisFanCold>60000){
-	// 	memMillisFanCold = millis();
-	// 	if (peltierOn){
-	// 		if (coldFanSpeed == 0)
-	// 			coldFanSpeed = 20;
-	// 		else {
-	// 			if (tempOut > tempDewPoint -2)
-	// 				fanColdDown();
-	// 			if (tempOut < tempDewPoint -3)
-	// 				fanColdUp();
-	// 		}
-	// 	}
-	// 	else {
-	// 		if (tempOut > tempDewPoint)
-	// 			fanColdStop();
-	// 	}
-		
-	// 	display();
-	// }
-
+	
 	bool forceDisplay = false;
 	if (peltierOn){ // MEttre TempCold < tempDewPoint + Ajouter temporisation pour évacuer gouttes
 		if (coldFanSpeed == 0)
 			coldFanSpeed = COLDFAN_SPEEDSTART;
 
 		else {
-			if (tempOut > tempDewPoint -2)
+			if (tempOut > tempDewPoint -1)
 				forceDisplay = fanColdDown();
+			if (tempOut > tempDewPoint -2)
+				memMillisFanCold = millis();
 			if (millis() - memMillisFanCold>30000) {
 				memMillisFanCold = millis();
-				if (tempOut < tempDewPoint -3)
-					forceDisplay = fanColdUp();
+				forceDisplay = fanColdUp();
 			}
 		}
+		if (tempOut<tempDewPoint)
+			memMillisDewPoint = millis();
+		if (millis() - memMillisDewPoint>900000) // 15 min
+			setPeltier(false);
 	}
 	else {
 		if (tempOut > tempDewPoint)
@@ -590,11 +546,11 @@ void loop() {
 	if (millis() - memMillis>300000 || pushJSON){
 		memMillis = millis();
 		pushJSON = false;
-		memHumidity = tempAndHum.humidity;
-		memTemperature = tempAndHum.temperature;
-		memTempCold = tempCold;
-		memTempHot = tempHot;
-		memTempOut = tempOut;
+		// memHumidity = tempAndHum.humidity;
+		// memTemperature = tempAndHum.temperature;
+		// memTempCold = tempCold;
+		// memTempHot = tempHot;
+		// memTempOut = tempOut;
 		sprintf(buffer, "{\"temperature\":%3.1f,\"humidity\":%3.1f,\"absHumidity\":%3.1f,\"dewPoint\":%3.1f,\"DHTstatus\":\"%s\",\"tempCold\":%3.1f,\"tempHot\":%3.1f,\"tempOut\":%3.1f}\0", 
 						tempAndHum.temperature, 
 						tempAndHum.humidity, 
