@@ -31,6 +31,9 @@ IPAddress broadcastIP;
 #define ADCMAX 4095		// Résolution MAX
 #define VSS 3.3			// Tension MAX
 
+#define COLDFAN_SPEEDMIN 18
+#define COLDFAN_SPEEDSTART 24
+
 SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterCold(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterOut(0.5, 0.5, 0.01);
@@ -361,7 +364,7 @@ float readTemp(uint8_t pin){
 bool fanColdUp(){
 	uint8_t mem = coldFanSpeed;
 	if 	(coldFanSpeed == 0)
-		coldFanSpeed = 20;
+		coldFanSpeed = COLDFAN_SPEEDSTART;
 	else
 		if (coldFanSpeed < 0x1F)
 			coldFanSpeed = coldFanSpeed + 1;
@@ -371,7 +374,7 @@ bool fanColdUp(){
 
 bool fanColdDown(){
 	uint8_t mem = coldFanSpeed;
-	if (coldFanSpeed>20)
+	if (coldFanSpeed>COLDFAN_SPEEDMIN)
 		coldFanSpeed = coldFanSpeed - 1;
 	ledcWrite(0,coldFanSpeed);
 	return (coldFanSpeed != mem);
@@ -558,15 +561,15 @@ void loop() {
 	// }
 
 	bool forceDisplay = false;
-	if (peltierOn){
+	if (peltierOn){ // MEttre TempCold < tempDewPoint + Ajouter temporisation pour évacuer gouttes
 		if (coldFanSpeed == 0)
-			coldFanSpeed = 20;
+			coldFanSpeed = COLDFAN_SPEEDSTART;
 
 		else {
+			if (tempOut > tempDewPoint -2)
+				forceDisplay = fanColdDown();
 			if (millis() - memMillisFanCold>30000) {
 				memMillisFanCold = millis();
-				if (tempOut > tempDewPoint -2)
-					forceDisplay = fanColdDown();
 				if (tempOut < tempDewPoint -3)
 					forceDisplay = fanColdUp();
 			}
