@@ -4,7 +4,7 @@
 #include <mydebug.h>
 #include <myfunction.h>
 #include "DHTesp.h"
-#include <driver/dac.h>
+// #include <driver/dac.h>
 #include "SimpleKalmanFilter.h"
 
 DHTesp dht;
@@ -28,11 +28,14 @@ IPAddress broadcastIP;
 #define ADCMAX 4095		// Résolution MAX
 #define VSS 3.3			// Tension MAX
 
-#define COLDFAN_SPEEDMIN 18
+//#define COLDFAN_SPEEDMIN 18
 #define COLDFAN_SPEEDSTART 24
+#define COLDFAN_SPEEDMIN 20
+#define COLDFAN_SPEEDMAX 0x1F
 
-#define DELAY_UPDONW 30000
-#define DELAY_STOP 600000
+#define DELAY_UP 	60000	// 1 minute
+#define DELAY_DOWN 	30000	// 30 s
+#define DELAY_STOP  600000	// 10 minutes
 
 SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterCold(0.5, 0.5, 0.01);
@@ -353,7 +356,7 @@ bool fanColdUp(){
 	if 	(coldFanSpeed == 0)
 		coldFanSpeed = COLDFAN_SPEEDSTART;
 	else
-		if (coldFanSpeed < 0x1F)
+		if (coldFanSpeed < COLDFAN_SPEEDMAX)
 			coldFanSpeed = coldFanSpeed + 1;
 	ledcWrite(0,coldFanSpeed);
 	return (coldFanSpeed != mem);
@@ -367,8 +370,8 @@ bool fanColdDown(){
 	return (coldFanSpeed != mem);
 }
 
-void fanColdStop(){
-	coldFanSpeed = 0;
+void fanColdSet(uint8_t fanSpeed){
+	coldFanSpeed = fanSpeed;
 	ledcWrite(0,coldFanSpeed);
 }
 
@@ -391,9 +394,9 @@ void display(){
 	coldFanSpeed,
 	DELAY_STOP/60000,
 	(millis()-memMillisStop) / 60000,
-	DELAY_UPDONW/1000,
+	DELAY_DOWN/1000,
 	(millis()-memMillisDown) / 1000,
-	DELAY_UPDONW/1000,
+	DELAY_UP/1000,
 	(millis()-memMillisUp) / 1000);
 }
 
@@ -519,19 +522,21 @@ void loop() {
 	tempHot = simpleKalmanFilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
 	tempOut = simpleKalmanFilterOut.updateEstimate(readTemp(TEMPOUT_PIN));
 	tempAndHum = dht.getTempAndHumidity();
-	tempDewPoint = dht.computeDewPoint(tempAndHum.temperature,tempAndHum.humidity);
 
-	// Automatic Hot Fan
 	digitalWrite(HOTFAN_PIN, peltierOn || (tempHot>tempAndHum.temperature + 5));
-	
-	if (peltierOn){ // MEttre TempCold < tempDewPoint + Ajouter temporisation pour évacuer gouttes
-		if (coldFanSpeed == 0){
-			coldFanSpeed = COLDFAN_SPEEDSTART;
-			memMillisDown = millis();	// Si au dessus du DewPoint, réduire vitesse
-			memMillisUp = millis();
-			memMillisStop = millis();	//Temporise l'arrêt si Out>DewPoint
-		}
-		else {
+	if (peltierOn && (coldFanSpeed == 0)){ // MEttre TempCold < tempDewPoint + Ajouter temporisation pour évacuer gouttes
+		fanColdSet(COLDFAN_SPEEDSTART);
+		memMillisDown = millis();	// Si au dessus du DewPoint, réduire vitesse
+		memMillisUp = millis();
+		memMillisStop = millis();	//Temporise l'arrêt si Out>DewPoint
+	}
+
+
+	if (dht.getStatus() == dht.ERROR_NONE){
+		tempDewPoint = dht.computeDewPoint(tempAndHum.temperature,tempAndHum.humidity);
+
+		// Automatic Hot Fan
+		if (peltierOn){ // MEttre TempCold < tempDewPoint + Ajouter temporisation pour évacuer gouttes
 			if (tempOut < (tempDewPoint -1)){
 				memMillisDown = millis();	// Si au dessus du DewPoint, réduire vitesse
 				memMillisStop = millis();	// Si en dessous du DewPoint, Temporise l'arrêt
@@ -540,22 +545,22 @@ void loop() {
 			if (tempOut > (tempDewPoint -2))	// Si très bas en sortie pendant 30s alors accéler circulation
 				memMillisUp = millis();
 
-			if (millis() - memMillisDown>DELAY_UPDONW){
+			if (millis() - memMillisDown>DELAY_DOWN){
 				memMillisDown = millis();
 				forceDisplay = fanColdDown();	// Si au dessus du DewPoint, réduire vitesse
 			}
-			if (millis() - memMillisUp>DELAY_UPDONW) {
+			if (millis() - memMillisUp>DELAY_UP) {
 				memMillisUp = millis();
 				forceDisplay = fanColdUp();
 			}
-		}
 
-		if (millis() - memMillisStop>DELAY_STOP) // si 15 min au dessus du DewPoint alors arrêt
-			setPeltier(false);
-	}
-	else {
-		if (tempOut > tempDewPoint)
-			fanColdStop();
+			if (millis() - memMillisStop>DELAY_STOP) // si 15 min au dessus du DewPoint alors arrêt
+				setPeltier(false);
+		}
+		else {
+			if (tempOut > tempDewPoint)
+				fanColdSet(0);
+		}
 	}
 
 	if ((millis() - memMillisDisplay>60000) || forceDisplay) {
@@ -587,5 +592,5 @@ void loop() {
 		udpNR.endPacket();
 	}
 	ArduinoOTA.handle();
-	delay(1000);	
+	delay(dht.getMinimumSamplingPeriod());
 }
