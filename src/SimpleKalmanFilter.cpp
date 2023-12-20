@@ -17,12 +17,16 @@ SimpleKalmanFilter::SimpleKalmanFilter(float mea_e, float est_e, float q)
 
 float SimpleKalmanFilter::updateEstimate(float mea)
 {
-  _kalman_gain = _err_estimate/(_err_estimate + _err_measure);
-  _current_estimate = _last_estimate + _kalman_gain * (mea - _last_estimate);
-  _err_estimate =  (1.0f - _kalman_gain)*_err_estimate + fabsf(_last_estimate-_current_estimate)*_q;
-  _last_estimate=_current_estimate;
+	if (firstMeasure){
+		firstMeasure = false;
+		_last_estimate = mea;
+	}
+	_kalman_gain = _err_estimate/(_err_estimate + _err_measure);
+	_current_estimate = _last_estimate + _kalman_gain * (mea - _last_estimate);
+	_err_estimate =  (1.0f - _kalman_gain)*_err_estimate + fabsf(_last_estimate-_current_estimate)*_q;
+	_last_estimate=_current_estimate;
 
-  return _current_estimate;
+	return _current_estimate;
 }
 
 void SimpleKalmanFilter::setMeasurementError(float mea_e)
