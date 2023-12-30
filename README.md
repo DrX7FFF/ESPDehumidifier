@@ -17,3 +17,7 @@ Recalculer les résistance du pont diviseur pour se retrouver sur une températu
 35°C 30% point de rosé : 14.8°C
 35°C 20% point de rosé :  8.7°C
 35°C 40% point de rosé : 19.4°C
+
+
+YCCFAN
+YDL3007S05s
