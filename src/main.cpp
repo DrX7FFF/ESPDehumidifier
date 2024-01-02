@@ -14,6 +14,7 @@ DFRobot_SHT3x   sht3x;
 #define PORTNR 8888
 IPAddress broadcastIP;
 
+#define LED				2
 #define PELTIER_PIN		17
 #define COLDFAN_PIN		18
 #define HOTFAN_PIN		19
@@ -30,14 +31,16 @@ IPAddress broadcastIP;
 #define ADCMAX 	4095		// Résolution MAX
 #define VSS 	3.3			// Tension MAX
 
-#define COLDFAN_SPEEDSTART 24
-#define COLDFAN_SPEEDMIN 20
+// #define COLDFAN_SPEEDSTART 24
+// #define COLDFAN_SPEEDMIN 20
+#define COLDFAN_SPEEDSTART 10
+#define COLDFAN_SPEEDMIN 2
 #define COLDFAN_SPEEDMAX 0x1F
 
 #define DELAY_UP 		90000	// 1.5 minutes
 #define DELAY_DOWN 		30000	// 30 s
-#define DELAY_STOP 		180000	// 3 minutes (1.5 min pour le démarrage)
-#define DELAY_FLOW 		300000	// 5 minutes
+#define DELAY_STOP 		600000	//180000	// 3 minutes (1.5 min pour le démarrage)
+#define DELAY_FLOW 		120000	// 5 minutes
 #define DELAY_REFLOW	3600000	// 60 minutes
 
 #define FILTER_TEMP_PRECISION	0.4
@@ -47,7 +50,7 @@ IPAddress broadcastIP;
 //SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterHot(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
 SimpleKalmanFilter simpleKalmanFilterCold(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
-SimpleKalmanFilter simpleKalmanFilterOut(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
+SimpleKalmanFilter simpleKalmanFilterOut(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, 0.05);
 // SimpleKalmanFilter simpleKalmanFilterHumidity(0.1, 0.1, 0.4);  //Très proche du réel et filtre les petites variations
 SimpleKalmanFilter simpleKalmanFilterHumidity(0.2, 0.2, 0.4);  //Très proche du réel et filtre les petites variations
 //SimpleKalmanFilter simpleKalmanFilterHumidity(0.4, 0.4, 0.1);
@@ -56,6 +59,7 @@ uint8_t coldFanSpeed = 0;
 bool hotFanOn = false;
 bool peltierOn = false;
 bool pushJSON = false;
+bool ledOn = false;
 
 uint32_t memMillisStop = 0;
 uint32_t memMillisDown = 0;
@@ -65,7 +69,6 @@ uint32_t memMillisIDLEMode = 0;
 
 float temperature;
 float humidity;
-float humidityRaw;
 float tempCold;
 float tempHot;
 float tempOut;
@@ -91,11 +94,13 @@ float readTemp(uint8_t pin) {
 
 	float T = 1 / (1 / T0 + log(Rt / R0) / BETA);  // Temperature in Kelvin
 	float Tc = T - 273.15;                         // Celsius
-	Tc = Tc + 1;                                 // Correction ancienne valeur 1.5
+	Tc = Tc + 1.5;                                 // Correction ancienne valeur 1.5
 	return Tc;
 }
 
 void setColdFan(uint8_t fanSpeed) {
+	if (fanSpeed == coldFanSpeed)
+		return;	
 	coldFanSpeed = fanSpeed;
 
 	if (coldFanSpeed > COLDFAN_SPEEDMAX)
@@ -156,6 +161,8 @@ void displayMode(){
 }
 
 void setMode(mode newMode) {
+	if ((newMode == mode::IDLE) && (activeMode == mode::MISTINESS) )
+		newMode = mode::REFRESH;
 	activeMode = newMode;
 	displayMode();
 	switch (activeMode) {
@@ -168,13 +175,14 @@ void setMode(mode newMode) {
 		case mode::FLOW:
 			setPeltier(false);
 			setHotFan(true);
-			setColdFan(COLDFAN_SPEEDMAX);
+			// setColdFan(COLDFAN_SPEEDMAX);
+			setColdFan(COLDFAN_SPEEDSTART);
 			memMillisFlowMode = millis();
 			break;
 		case mode::MISTINESS:
 			setPeltier(true);
 			setHotFan(true);
-			setColdFan(COLDFAN_SPEEDMAX);
+			setColdFan(COLDFAN_SPEEDSTART);
 			memMillisDown = millis();  // Si au dessus du DewPoint, réduire vitesse
 			memMillisUp = millis();
 			memMillisStop = millis();  // Temporise l'arrêt si Out>DewPoint
@@ -217,16 +225,13 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			if (coldFanSpeed)
 				setColdFan(0);
 			else
-				setColdFan(COLDFAN_SPEEDMAX);
-			DEBUGLOG("Cold speed : %d\r\n", coldFanSpeed);
+				setColdFan(COLDFAN_SPEEDSTART);
 			break;
 		case '+':
 			upColdFan();
-			DEBUGLOG("Cold speed : %d\r\n", coldFanSpeed);
 			break;
 		case '-':
 			downColdFan();
-			DEBUGLOG("Cold speed : %d\r\n", coldFanSpeed);
 			break;
 		case '?':
 			DEBUGLOG("?        Help\r\n");
@@ -240,7 +245,6 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			DEBUGLOG("1        Mistiness Mode\r\n");
 			DEBUGLOG("r        REFRESH Mode\r\n");
 			DEBUGLOG("f        FLOW Mode\r\n");
-
 			DEBUGLOG("Peltier : %s\r\n", peltierOn ? "On" : "Off");
 			DEBUGLOG("Hot fan : %s\r\n", hotFanOn ? "On" : "Off");
 			DEBUGLOG("Cold speed : %d\r\n", coldFanSpeed);
@@ -252,10 +256,9 @@ void sendToTeleplot() {
 	static char buffer[300];
 	static WiFiUDP udpPlot;
 
-	sprintf(buffer, "temperature:%3.1f\nhumidity:%3.1f\nhumidityRaw:%3.1f\ndewPoint:%3.1f\ntempCold:%3.1f\ntempHot:%3.1f\ntempOut:%3.1f\ntempOutRaw:%3.1f\nfanSpeed:%d\ndelta:%3.1f\nTimerStop:%d\nTimerDown:%d\nTimerUp:%d\n",
+	sprintf(buffer, "temperature:%3.1f\nhumidity:%3.1f\ndewPoint:%3.1f\ntempCold:%3.1f\ntempHot:%3.1f\ntempOut:%3.1f\ntempOutRaw:%3.1f\nfanSpeed:%d\ndelta:%3.1f\nTimerStop:%d\nTimerDown:%d\nTimerUp:%d\n",
 			temperature,
 			humidity,
-			humidityRaw,
 			tempDewPoint,
 			tempCold,
 			tempHot,
@@ -340,7 +343,8 @@ void setup() {
 	pinMode(HOTFAN_PIN, OUTPUT);
 	pinMode(PELTIER_PIN, OUTPUT);
 	pinMode(COLDFAN_PIN, OUTPUT);
-	ledcSetup(0, 100000, 5);
+	pinMode(LED, OUTPUT);
+	ledcSetup(0, 25000, 5);
 	ledcAttachPin(COLDFAN_PIN, 0);
 
 	DEBUGLOG("Init SHT3x\n");
@@ -355,7 +359,12 @@ void setup() {
 	setMode(mode::REFRESH);
 }
 
+// TODO : Attention si pas de lecture temperature alors mettre en IDLE
+
 void loop() {
+	ledOn = !ledOn;
+	digitalWrite(LED, ledOn);
+
 	// Read values
 	tempCold = simpleKalmanFilterCold.updateEstimate(readTemp(TEMPCOLD_PIN));
 	tempHot = simpleKalmanFilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
@@ -365,12 +374,8 @@ void loop() {
 		tempOutMax = tempOut;
 	if (tempOut < tempOutMin)
 		tempOutMin = tempOut;
-
-	// temperature = sht3x.getTemperatureC();
-	// humidity = sht3x.getHumidityRH();
 	DFRobot_SHT3x::sRHAndTemp_t data = sht3x.readTemperatureAndHumidity();
 	if(data.ERR == 0){
-		humidityRaw = data.Humidity;
 		humidity = simpleKalmanFilterHumidity.updateEstimate(data.Humidity);
 		temperature = data.TemperatureC;
 		tempDewPoint = sht3x.computeDewPoint(temperature, humidity);
@@ -380,8 +385,8 @@ void loop() {
 
 	switch (activeMode) {
 		case mode::IDLE:
-			// if (millis() - memMillisIDLEMode>DELAY_REFLOW)
-			// 	setMode(mode::FLOW);
+			if (millis() - memMillisIDLEMode>DELAY_REFLOW)
+				setMode(mode::FLOW);
 			break;
 		case mode::FLOW:
 			if (millis() - memMillisFlowMode>DELAY_FLOW)
@@ -404,7 +409,7 @@ void loop() {
 				upColdFan();
 			}
 
-			if ((tempOut < (tempDewPoint - 1)) || (coldFanSpeed > COLDFAN_SPEEDMIN)) {
+			if ((tempOut < (tempDewPoint - 0)) || (coldFanSpeed > COLDFAN_SPEEDMIN)) {
 				memMillisStop = millis();  // Si en dessous du DewPoint, Temporise l'arrêt
 			}
 			if (millis() - memMillisStop > DELAY_STOP)  // si 2 min au dessus du DewPoint et vitesse au minimum alors arrêt

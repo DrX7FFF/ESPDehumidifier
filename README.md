@@ -21,3 +21,6 @@ Recalculer les résistance du pont diviseur pour se retrouver sur une températu
 
 YCCFAN
 YDL3007S05s
+
+
+Plus bas 37.2%
