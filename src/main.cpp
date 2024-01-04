@@ -37,8 +37,7 @@ IPAddress broadcastIP;
 #define COLDFAN_SPEEDMIN 2
 #define COLDFAN_SPEEDMAX 0x1F
 
-#define DELAY_UP 		90000	// 1.5 minutes
-#define DELAY_DOWN 		30000	// 30 s
+#define DELAY_REGUL		20000	//20 s
 #define DELAY_STOP 		600000	//180000	// 3 minutes (1.5 min pour le démarrage)
 #define DELAY_FLOW 		120000	// 5 minutes
 #define DELAY_REFLOW	3600000	// 60 minutes
@@ -54,6 +53,7 @@ SimpleKalmanFilter simpleKalmanFilterOut(FILTER_TEMP_PRECISION, FILTER_TEMP_PREC
 // SimpleKalmanFilter simpleKalmanFilterHumidity(0.1, 0.1, 0.4);  //Très proche du réel et filtre les petites variations
 SimpleKalmanFilter simpleKalmanFilterHumidity(0.2, 0.2, 0.4);  //Très proche du réel et filtre les petites variations
 //SimpleKalmanFilter simpleKalmanFilterHumidity(0.4, 0.4, 0.1);
+SimpleKalmanFilter simpleKalmanFilterDelta(0.2, 0.2, 0.05);
 
 uint8_t coldFanSpeed = 0;
 bool hotFanOn = false;
@@ -61,9 +61,8 @@ bool peltierOn = false;
 bool pushJSON = false;
 bool ledOn = false;
 
+unsigned long memMillisRegul = 0;
 uint32_t memMillisStop = 0;
-uint32_t memMillisDown = 0;
-uint32_t memMillisUp = 0;
 uint32_t memMillisFlowMode = 0;
 uint32_t memMillisIDLEMode = 0;
 
@@ -76,12 +75,15 @@ float tempOutRaw;
 float tempOutMax = -100;
 float tempOutMin = 100;
 float tempDewPoint;
+float tempDelta;
+int regul;
 
 enum mode {
 	IDLE,
 	MISTINESS,
 	FLOW,
-	REFRESH
+	REFRESH,
+	ERROR
 };
 
 mode activeMode = mode::IDLE;
@@ -98,18 +100,51 @@ float readTemp(uint8_t pin) {
 	return Tc;
 }
 
-void setColdFan(uint8_t fanSpeed) {
+void sendToNR(bool fanSpeedOnly = false) {
+	static char buffer[300];
+	static WiFiUDP udpNR;
+	static uint32_t memMillis = 0;
+
+	if (fanSpeedOnly){
+		sprintf(buffer, "{\"coldFanSpeed\":%d}\0",
+				coldFanSpeed);
+		udpNR.beginPacket(broadcastIP, PORTNR);
+		udpNR.print(buffer);
+		udpNR.endPacket();
+	}
+	else
+		if (millis() - memMillis > 300000 || pushJSON) {
+			memMillis = millis();
+			pushJSON = false;
+			sprintf(buffer, "{\"temperature\":%3.1f,\"humidity\":%3.1f,\"absHumidity\":%3.1f,\"dewPoint\":%3.1f,\"tempCold\":%3.1f,\"tempHot\":%3.1f,\"tempOut\":%3.1f}\0",
+					temperature,
+					humidity,
+					sht3x.computeAbsoluteHumidity(temperature, humidity),
+					tempDewPoint,
+					tempCold,
+					tempHot,
+					(tempOutMax+tempOutMin)/2);
+			tempOutMax = tempOut;
+			tempOutMin = tempOut;
+			udpNR.beginPacket(broadcastIP, PORTNR);
+			udpNR.print(buffer);
+			udpNR.endPacket();
+		}
+
+}
+
+void setColdFan(int fanSpeed) {
+	if (fanSpeed > COLDFAN_SPEEDMAX)
+		fanSpeed = COLDFAN_SPEEDMAX;
+	if (fanSpeed < COLDFAN_SPEEDMIN)
+		fanSpeed = 0;
 	if (fanSpeed == coldFanSpeed)
 		return;	
+
 	coldFanSpeed = fanSpeed;
-
-	if (coldFanSpeed > COLDFAN_SPEEDMAX)
-		coldFanSpeed = COLDFAN_SPEEDMAX;
-	if (coldFanSpeed < COLDFAN_SPEEDMIN)
-		coldFanSpeed = 0;
-
 	ledcWrite(0, coldFanSpeed);
 	DEBUGLOG("Cold speed : %d\r\n", coldFanSpeed);
+	sendToNR(true);
 }
 
 void upColdFan() {
@@ -154,6 +189,9 @@ void displayMode(){
 		case mode::REFRESH:
 			DEBUGLOG("Mode : REFRESH\r\n");
 			break;
+		case mode::ERROR:
+			DEBUGLOG("Mode : ERROR\r\n");
+			break;
 		default:
 			DEBUGLOG("Mode : ???\r\n");
 			break;
@@ -175,16 +213,13 @@ void setMode(mode newMode) {
 		case mode::FLOW:
 			setPeltier(false);
 			setHotFan(true);
-			// setColdFan(COLDFAN_SPEEDMAX);
-			setColdFan(COLDFAN_SPEEDSTART);
+			setColdFan(0);
 			memMillisFlowMode = millis();
 			break;
 		case mode::MISTINESS:
 			setPeltier(true);
 			setHotFan(true);
-			setColdFan(COLDFAN_SPEEDSTART);
-			memMillisDown = millis();  // Si au dessus du DewPoint, réduire vitesse
-			memMillisUp = millis();
+			setColdFan(COLDFAN_SPEEDMAX);
 			memMillisStop = millis();  // Temporise l'arrêt si Out>DewPoint
 			break;
 		case mode::REFRESH:
@@ -256,7 +291,7 @@ void sendToTeleplot() {
 	static char buffer[300];
 	static WiFiUDP udpPlot;
 
-	sprintf(buffer, "temperature:%3.1f\nhumidity:%3.1f\ndewPoint:%3.1f\ntempCold:%3.1f\ntempHot:%3.1f\ntempOut:%3.1f\ntempOutRaw:%3.1f\nfanSpeed:%d\ndelta:%3.1f\nTimerStop:%d\nTimerDown:%d\nTimerUp:%d\n",
+	sprintf(buffer, "temperature:%3.1f\nhumidity:%3.1f\ndewPoint:%3.1f\ntempCold:%3.1f\ntempHot:%3.1f\ntempOut:%3.1f\ntempOutRaw:%3.1f\nfanSpeed:%d\ndeltaRaw:%3.1f\nTimerStop:%d\ndelta:%3.1f\nregul:%d\nTimerRegul:%d\n",
 			temperature,
 			humidity,
 			tempDewPoint,
@@ -267,36 +302,12 @@ void sendToTeleplot() {
 			coldFanSpeed,
 			tempDewPoint - tempOut,
 			(DELAY_STOP + memMillisStop - millis()) / 1000,
-			(DELAY_DOWN + memMillisDown - millis()) / 1000,
-			(DELAY_UP + memMillisUp - millis()) / 1000);
+			tempDelta,
+			regul,
+			(DELAY_REGUL + memMillisRegul - millis()) /1000);
 	udpPlot.beginPacket(broadcastIP, PORTPLOT);
 	udpPlot.print(buffer);
 	udpPlot.endPacket();
-}
-
-void sendToNR() {
-	static char buffer[300];
-	static WiFiUDP udpNR;
-	static uint32_t memMillis = 0;
-
-	if (millis() - memMillis > 300000 || pushJSON) {
-		memMillis = millis();
-		pushJSON = false;
-		sprintf(buffer, "{\"temperature\":%3.1f,\"humidity\":%3.1f,\"absHumidity\":%3.1f,\"dewPoint\":%3.1f,\"tempCold\":%3.1f,\"tempHot\":%3.1f,\"tempOut\":%3.1f,\"coldFanSpeed\":%d}\0",
-				temperature,
-				humidity,
-				sht3x.computeAbsoluteHumidity(temperature, humidity),
-				tempDewPoint,
-				tempCold,
-				tempHot,
-				(tempOutMax+tempOutMin)/2,
-				coldFanSpeed);
-		udpNR.beginPacket(broadcastIP, PORTNR);
-		udpNR.print(buffer);
-		udpNR.endPacket();
-		tempOutMax = tempOut;
-		tempOutMin = tempOut;
-	}
 }
 
 void setup() {
@@ -360,7 +371,6 @@ void setup() {
 }
 
 // TODO : Attention si pas de lecture temperature alors mettre en IDLE
-
 void loop() {
 	ledOn = !ledOn;
 	digitalWrite(LED, ledOn);
@@ -370,6 +380,7 @@ void loop() {
 	tempHot = simpleKalmanFilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
 	tempOutRaw = readTemp(TEMPOUT_PIN);
 	tempOut = simpleKalmanFilterOut.updateEstimate(tempOutRaw);
+
 	if (tempOut > tempOutMax)
 		tempOutMax = tempOut;
 	if (tempOut < tempOutMin)
@@ -379,9 +390,12 @@ void loop() {
 		humidity = simpleKalmanFilterHumidity.updateEstimate(data.Humidity);
 		temperature = data.TemperatureC;
 		tempDewPoint = sht3x.computeDewPoint(temperature, humidity);
+		tempDelta = simpleKalmanFilterDelta.updateEstimate(tempDewPoint - tempOut);
 	}
-	else
+	else{
     	DEBUGLOG("Failed to read Data\n");
+		setMode(mode::ERROR);
+	}
 
 	switch (activeMode) {
 		case mode::IDLE:
@@ -393,26 +407,19 @@ void loop() {
 				setMode(mode::IDLE);
 			break;
 		case mode::MISTINESS:
-			if (tempOut < (tempDewPoint - 1)) {
-				memMillisDown = millis();  // Si au dessus du DewPoint, réduire vitesse
-			}
-			if (millis() - memMillisDown > DELAY_DOWN) {
-				memMillisDown = millis();
-				downColdFan();  // Si au dessus du DewPoint, réduire vitesse
-			}
-
-			if (tempOut > (tempDewPoint - 2))  // Si très bas en sortie pendant 30s alors accéler circulation
-				memMillisUp = millis();
-
-			if (millis() - memMillisUp > DELAY_UP) {
-				memMillisUp = millis();
-				upColdFan();
+			regul = (tempDelta - 1.2) / 0.4;
+			regul = (regul>0)?floor(regul):ceil(regul);
+			if ((regul != 0) && (millis() - memMillisRegul > DELAY_REGUL )){
+				memMillisRegul = millis();
+				setColdFan(coldFanSpeed + regul>=COLDFAN_SPEEDMIN?coldFanSpeed + regul:COLDFAN_SPEEDMIN);
 			}
 
-			if ((tempOut < (tempDewPoint - 0)) || (coldFanSpeed > COLDFAN_SPEEDMIN)) {
+			if ((tempDelta>0) || (coldFanSpeed > COLDFAN_SPEEDMIN))
 				memMillisStop = millis();  // Si en dessous du DewPoint, Temporise l'arrêt
-			}
 			if (millis() - memMillisStop > DELAY_STOP)  // si 2 min au dessus du DewPoint et vitesse au minimum alors arrêt
+				setMode(mode::REFRESH);
+			
+			if (tempHot > 54)  // Si TempHot trop chaud alors arrêt
 				setMode(mode::REFRESH);
 			break;
 		case mode::REFRESH:
