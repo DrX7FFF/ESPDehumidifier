@@ -15,12 +15,12 @@ DFRobot_SHT3x   sht3x;
 IPAddress broadcastIP;
 
 #define LED				2
-#define PELTIER_PIN		17
-#define COLDFAN_PIN		18
-#define HOTFAN_PIN		19
-#define I2C_SDA			21
-#define I2C_SCL			22
-#define TEMPOUT_PIN		32
+#define PELTIER_PIN		4
+#define HOTFAN_PIN		16
+#define COLDFAN_PIN		17
+#define SHT_SDA			18
+#define SHT_SCL			19
+#define TEMPOUT_PIN		39
 #define TEMPHOT_PIN		34   // GPIO 34 = A?, uses any valid Ax pin as you wish
 #define TEMPCOLD_PIN	35  // GPIO 35 = A7, uses any valid Ax pin as you wish
 
@@ -31,13 +31,10 @@ IPAddress broadcastIP;
 #define ADCMAX 	4095		// Résolution MAX
 #define VSS 	3.3			// Tension MAX
 
-// #define COLDFAN_SPEEDSTART 24
-// #define COLDFAN_SPEEDMIN 20
-#define COLDFAN_SPEEDSTART 10
 #define COLDFAN_SPEEDMIN 2
 #define COLDFAN_SPEEDMAX 0x1F
 
-#define DELAY_REGUL		20000	//20 s
+#define DELAY_REGUL		30000	//30 s
 #define DELAY_STOP 		600000	//180000	// 3 minutes (1.5 min pour le démarrage)
 #define DELAY_FLOW 		120000	// 5 minutes
 #define DELAY_REFLOW	3600000	// 60 minutes
@@ -149,7 +146,7 @@ void setColdFan(int fanSpeed) {
 
 void upColdFan() {
 	if (coldFanSpeed == 0)
-		setColdFan(COLDFAN_SPEEDSTART);
+		setColdFan(COLDFAN_SPEEDMAX);
 	else
 		setColdFan(coldFanSpeed + 1);
 }
@@ -176,26 +173,28 @@ void setHotFan(bool cmd) {
 }
 
 void displayMode(){
+	DEBUGLOG("Mode : ");
 	switch (activeMode) {
 		case mode::IDLE:
-			DEBUGLOG("Mode : IDLE\r\n");
+			DEBUGLOG("IDLE");
 			break;
 		case mode::FLOW:
-			DEBUGLOG("Mode : FLOW\r\n");
+			DEBUGLOG("FLOW");
 			break;
 		case mode::MISTINESS:
-			DEBUGLOG("Mode : MISTINESS\r\n");
+			DEBUGLOG("MISTINESS");
 			break;
 		case mode::REFRESH:
-			DEBUGLOG("Mode : REFRESH\r\n");
+			DEBUGLOG("REFRESH");
 			break;
 		case mode::ERROR:
-			DEBUGLOG("Mode : ERROR\r\n");
+			DEBUGLOG("ERROR");
 			break;
 		default:
-			DEBUGLOG("Mode : ???\r\n");
+			DEBUGLOG("???");
 			break;
 	}
+	DEBUGLOG("\n");
 }
 
 void setMode(mode newMode) {
@@ -227,6 +226,10 @@ void setMode(mode newMode) {
 			setHotFan(true);
 			setColdFan(COLDFAN_SPEEDMAX);
 			break;
+		case mode::ERROR:
+			setPeltier(false);
+			setHotFan(false);
+			setColdFan(0);
 		default:
 			break;
 	}
@@ -260,7 +263,7 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			if (coldFanSpeed)
 				setColdFan(0);
 			else
-				setColdFan(COLDFAN_SPEEDSTART);
+				setColdFan(COLDFAN_SPEEDMAX);
 			break;
 		case '+':
 			upColdFan();
@@ -268,8 +271,18 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 		case '-':
 			downColdFan();
 			break;
+		case '8':
+			if(!sht3x.softReset())
+				DEBUGLOG("Failed to Reset the chip....\n");
+			if(!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz,sht3x.eRepeatability_High))
+				DEBUGLOG("Failed to enter the periodic mode\n");
+			break;
+		case '9':
+			ESP.restart();
+			break;
 		case '?':
 			DEBUGLOG("?        Help\r\n");
+			DEBUGLOG("9        Restart\r\n");
 			DEBUGLOG("H        Hot fan swap\r\n");
 			DEBUGLOG("P        Peltier swap\r\n");
 			DEBUGLOG("J        Push JSON\r\n");
@@ -358,6 +371,7 @@ void setup() {
 	ledcSetup(0, 25000, 5);
 	ledcAttachPin(COLDFAN_PIN, 0);
 
+	Wire.setPins(SHT_SDA,SHT_SCL);
 	DEBUGLOG("Init SHT3x\n");
 	if (sht3x.begin() != 0)
 		DEBUGLOG("Failed to Initialize the chip....\n");
@@ -394,6 +408,13 @@ void loop() {
 	}
 	else{
     	DEBUGLOG("Failed to read Data\n");
+		// DEBUGLOG("Init SHT3x\n");
+		// if (sht3x.begin() != 0)
+		// 	DEBUGLOG("Failed to Initialize the chip....\n");
+		// if(!sht3x.softReset())
+		// 	DEBUGLOG("Failed to Reset the chip....\n");
+		// if(!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz,sht3x.eRepeatability_High))
+		// 	DEBUGLOG("Failed to enter the periodic mode\n");
 		setMode(mode::ERROR);
 	}
 
@@ -425,6 +446,9 @@ void loop() {
 		case mode::REFRESH:
 			if (tempHot < temperature + 5)
 				setMode(mode::IDLE);
+			break;
+		case mode::ERROR:
+			// Ne rien faire
 			break;
 		default:
 			setMode(mode::IDLE);

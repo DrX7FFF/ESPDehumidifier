@@ -24,3 +24,8 @@ YDL3007S05s
 
 
 Plus bas 37.2%
+
+
+largeur 95 mm -> 90 mm
+hauteur 99 mm -> 90 mm
+		74 mm -> 70 mm
