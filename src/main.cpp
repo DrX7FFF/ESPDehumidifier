@@ -14,7 +14,7 @@ DFRobot_SHT3x   sht3x;
 #define PORTNR 8888
 IPAddress broadcastIP;
 
-#define LED				2
+#define LIGHT_PIN		25
 #define PELTIER_PIN		4
 #define HOTFAN_PIN		16
 #define COLDFAN_PIN		17
@@ -41,7 +41,7 @@ IPAddress broadcastIP;
 
 #define FILTER_TEMP_PRECISION	0.4
 #define FILTER_TEMP_SPEED		0.01
-
+#define DEWPOINT_OFFSET			1.2
 
 //SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterHot(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
@@ -154,6 +154,14 @@ void upColdFan() {
 void downColdFan() {
 	if (coldFanSpeed > COLDFAN_SPEEDMIN)
 		setColdFan(coldFanSpeed - 1);
+}
+
+void setLight(bool cmd){
+	if (cmd == ledOn)
+		return;
+	ledOn = cmd;
+	digitalWrite(LIGHT_PIN, ledOn);
+	DEBUGLOG("Light : %s\r\n", ledOn ? "On" : "Off");
 }
 
 void setPeltier(bool cmd) {
@@ -280,6 +288,9 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 		case '9':
 			ESP.restart();
 			break;
+		case 'L':
+			setLight(!ledOn);
+			break;
 		case '?':
 			DEBUGLOG("?        Help\r\n");
 			DEBUGLOG("9        Restart\r\n");
@@ -289,6 +300,7 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			DEBUGLOG("C        Cold fan swap\r\n");
 			DEBUGLOG("+        Cold Up\r\n");
 			DEBUGLOG("-        Cold Down\r\n");
+			DEBUGLOG("L        Light switch\r\n");
 			DEBUGLOG("0        IDLE Mode\r\n");
 			DEBUGLOG("1        Mistiness Mode\r\n");
 			DEBUGLOG("r        REFRESH Mode\r\n");
@@ -304,7 +316,7 @@ void sendToTeleplot() {
 	static char buffer[300];
 	static WiFiUDP udpPlot;
 
-	sprintf(buffer, "temperature:%3.1f\nhumidity:%3.1f\ndewPoint:%3.1f\ntempCold:%3.1f\ntempHot:%3.1f\ntempOut:%3.1f\ntempOutRaw:%3.1f\nfanSpeed:%d\ndeltaRaw:%3.1f\nTimerStop:%d\ndelta:%3.1f\nregul:%d\nTimerRegul:%d\n",
+	sprintf(buffer, "temperature:%3.1f\nhumidity:%3.1f\ndewPoint:%3.1f\ntempCold:%3.1f\ntempHot:%3.1f\ntempOut:%3.1f\ntempOutRaw:%3.1f\nfanSpeed:%d\nTimerStop:%d\ndelta:%3.1f\nregul:%d\nTimerRegul:%d\n",
 			temperature,
 			humidity,
 			tempDewPoint,
@@ -313,7 +325,6 @@ void sendToTeleplot() {
 			tempOut,
 			tempOutRaw,
 			coldFanSpeed,
-			tempDewPoint - tempOut,
 			(DELAY_STOP + memMillisStop - millis()) / 1000,
 			tempDelta,
 			regul,
@@ -367,7 +378,8 @@ void setup() {
 	pinMode(HOTFAN_PIN, OUTPUT);
 	pinMode(PELTIER_PIN, OUTPUT);
 	pinMode(COLDFAN_PIN, OUTPUT);
-	pinMode(LED, OUTPUT);
+	pinMode(LIGHT_PIN, OUTPUT);
+	setLight(false);
 	ledcSetup(0, 25000, 5);
 	ledcAttachPin(COLDFAN_PIN, 0);
 
@@ -386,9 +398,6 @@ void setup() {
 
 // TODO : Attention si pas de lecture temperature alors mettre en IDLE
 void loop() {
-	ledOn = !ledOn;
-	digitalWrite(LED, ledOn);
-
 	// Read values
 	tempCold = simpleKalmanFilterCold.updateEstimate(readTemp(TEMPCOLD_PIN));
 	tempHot = simpleKalmanFilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
@@ -404,7 +413,7 @@ void loop() {
 		humidity = simpleKalmanFilterHumidity.updateEstimate(data.Humidity);
 		temperature = data.TemperatureC;
 		tempDewPoint = sht3x.computeDewPoint(temperature, humidity);
-		tempDelta = simpleKalmanFilterDelta.updateEstimate(tempDewPoint - tempOut);
+		tempDelta = simpleKalmanFilterDelta.updateEstimate(tempDewPoint - DEWPOINT_OFFSET - tempOut);
 	}
 	else{
     	DEBUGLOG("Failed to read Data\n");
@@ -428,14 +437,14 @@ void loop() {
 				setMode(mode::IDLE);
 			break;
 		case mode::MISTINESS:
-			regul = (tempDelta - 1.2) / 0.4;
+			regul = tempDelta / 0.4;
 			regul = (regul>0)?floor(regul):ceil(regul);
 			if ((regul != 0) && (millis() - memMillisRegul > DELAY_REGUL )){
 				memMillisRegul = millis();
-				setColdFan(coldFanSpeed + regul>=COLDFAN_SPEEDMIN?coldFanSpeed + regul:COLDFAN_SPEEDMIN);
+				setColdFan((coldFanSpeed + regul)>=COLDFAN_SPEEDMIN?(coldFanSpeed + regul):COLDFAN_SPEEDMIN);
 			}
 
-			if ((tempDelta>0) || (coldFanSpeed > COLDFAN_SPEEDMIN))
+			if ((regul>=0) || (coldFanSpeed > COLDFAN_SPEEDMIN))
 				memMillisStop = millis();  // Si en dessous du DewPoint, Temporise l'arrêt
 			if (millis() - memMillisStop > DELAY_STOP)  // si 2 min au dessus du DewPoint et vitesse au minimum alors arrêt
 				setMode(mode::REFRESH);
