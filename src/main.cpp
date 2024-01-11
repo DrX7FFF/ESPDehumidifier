@@ -1,56 +1,57 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
+#include <AsyncTCP.h>
+#include <DFRobot_SHT3x.h>
 #include <WiFi.h>
 #include <mydebug.h>
 #include <myfunction.h>
-#include <DFRobot_SHT3x.h>
-#include "SimpleKalmanFilter.h"
-#include "ESP_ADC.h"
-#include <AsyncTCP.h>
 
-DFRobot_SHT3x   sht3x;
+#include "ESP_ADC.h"
+#include "PIDControler.h"
+#include "SimpleKalmanFilter.h"
+
+DFRobot_SHT3x sht3x;
+PIDController pid(6, 0.1, 0);
 
 #define PORTPLOT 47269
 #define PORTNR 8888
 IPAddress broadcastIP;
 
-#define LIGHT_PIN		25
-#define PELTIER_PIN		4
-#define HOTFAN_PIN		16
-#define COLDFAN_PIN		17
-#define SHT_SDA			18
-#define SHT_SCL			19
-#define TEMPOUT_PIN		39
-#define TEMPHOT_PIN		34   // GPIO 34 = A?, uses any valid Ax pin as you wish
-#define TEMPCOLD_PIN	35  // GPIO 35 = A7, uses any valid Ax pin as you wish
+#define LIGHT_PIN 25
+#define PELTIER_PIN 4
+#define HOTFAN_PIN 16
+#define COLDFAN_PIN 17
+#define SHT_SDA 18
+#define SHT_SCL 19
+#define TEMPOUT_PIN 39
+#define TEMPHOT_PIN 34   // GPIO 34 = A?, uses any valid Ax pin as you wish
+#define TEMPCOLD_PIN 35  // GPIO 35 = A7, uses any valid Ax pin as you wish
 
-#define R1 		100000 		// voltage divider resistor value
-#define BETA 	3950.0		// Beta value
-#define T0 		298.15 		// Temperature in Kelvin for 25 degree Celsius
-#define R0 		100000		// Resistance of Thermistor at 25 degree Celsius 94kOhm
-#define ADCMAX 	4095		// Résolution MAX
-#define VSS 	3.3			// Tension MAX
+#define R1 100000    // voltage divider resistor value
+#define BETA 3950.0  // Beta value
+#define T0 298.15    // Temperature in Kelvin for 25 degree Celsius
+#define R0 100000    // Resistance of Thermistor at 25 degree Celsius 94kOhm
+#define ADCMAX 4095  // Résolution MAX
+#define VSS 3.3      // Tension MAX
 
 #define COLDFAN_SPEEDMIN 2
 #define COLDFAN_SPEEDMAX 0x1F
 
-#define DELAY_REGUL		30000	//30 s
-#define DELAY_STOP 		600000	//180000	// 3 minutes (1.5 min pour le démarrage)
-#define DELAY_FLOW 		120000	// 5 minutes
-#define DELAY_REFLOW	3600000	// 60 minutes
+#define DELAY_STOP 600000     // 180000	// 3 minutes (1.5 min pour le démarrage)
+#define DELAY_FLOW 120000     // 5 minutes
+#define DELAY_REFLOW 3600000  // 60 minutes
 
-#define FILTER_TEMP_PRECISION	0.4
-#define FILTER_TEMP_SPEED		0.01
-#define DEWPOINT_OFFSET			1.2
+#define FILTER_TEMP_PRECISION 0.4
+#define FILTER_TEMP_SPEED 0.01
+#define DEWPOINT_OFFSET 1.2
 
-//SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
+// SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterHot(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
 SimpleKalmanFilter simpleKalmanFilterCold(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
 SimpleKalmanFilter simpleKalmanFilterOut(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, 0.05);
 // SimpleKalmanFilter simpleKalmanFilterHumidity(0.1, 0.1, 0.4);  //Très proche du réel et filtre les petites variations
-SimpleKalmanFilter simpleKalmanFilterHumidity(0.2, 0.2, 0.4);  //Très proche du réel et filtre les petites variations
-//SimpleKalmanFilter simpleKalmanFilterHumidity(0.4, 0.4, 0.1);
-SimpleKalmanFilter simpleKalmanFilterDelta(0.2, 0.2, 0.05);
+SimpleKalmanFilter simpleKalmanFilterHumidity(0.2, 0.2, 0.4);  // Très proche du réel et filtre les petites variations
+// SimpleKalmanFilter simpleKalmanFilterHumidity(0.4, 0.4, 0.1);
 
 uint8_t coldFanSpeed = 0;
 bool hotFanOn = false;
@@ -58,7 +59,6 @@ bool peltierOn = false;
 bool pushJSON = false;
 bool ledOn = false;
 
-unsigned long memMillisRegul = 0;
 uint32_t memMillisStop = 0;
 uint32_t memMillisFlowMode = 0;
 uint32_t memMillisIDLEMode = 0;
@@ -85,7 +85,6 @@ enum mode {
 
 mode activeMode = mode::IDLE;
 
-
 float readTemp(uint8_t pin) {
 	float adc = ADC_LUT[analogRead(pin)];
 	float Vout = adc * VSS / ADCMAX;
@@ -97,37 +96,29 @@ float readTemp(uint8_t pin) {
 	return Tc;
 }
 
-void sendToNR(bool fanSpeedOnly = false) {
+void sendToNR() {
 	static char buffer[300];
 	static WiFiUDP udpNR;
 	static uint32_t memMillis = 0;
 
-	if (fanSpeedOnly){
-		sprintf(buffer, "{\"coldFanSpeed\":%d}\0",
+	if (millis() - memMillis > 300000 || pushJSON) {
+		memMillis = millis();
+		pushJSON = false;
+		sprintf(buffer, "{\"temperature\":%.1f,\"humidity\":%.1f,\"absHumidity\":%.1f,\"dewPoint\":%.1f,\"tempCold\":%.1f,\"tempHot\":%.1f,\"tempOut\":%.1f,\"coldFanSpeed\":%d}\0",
+				temperature,
+				humidity,
+				sht3x.computeAbsoluteHumidity(temperature, humidity),
+				tempDewPoint,
+				tempCold,
+				tempHot,
+				(tempOutMax + tempOutMin) / 2,
 				coldFanSpeed);
+		tempOutMax = tempOut;
+		tempOutMin = tempOut;
 		udpNR.beginPacket(broadcastIP, PORTNR);
 		udpNR.print(buffer);
 		udpNR.endPacket();
 	}
-	else
-		if (millis() - memMillis > 300000 || pushJSON) {
-			memMillis = millis();
-			pushJSON = false;
-			sprintf(buffer, "{\"temperature\":%3.1f,\"humidity\":%3.1f,\"absHumidity\":%3.1f,\"dewPoint\":%3.1f,\"tempCold\":%3.1f,\"tempHot\":%3.1f,\"tempOut\":%3.1f}\0",
-					temperature,
-					humidity,
-					sht3x.computeAbsoluteHumidity(temperature, humidity),
-					tempDewPoint,
-					tempCold,
-					tempHot,
-					(tempOutMax+tempOutMin)/2);
-			tempOutMax = tempOut;
-			tempOutMin = tempOut;
-			udpNR.beginPacket(broadcastIP, PORTNR);
-			udpNR.print(buffer);
-			udpNR.endPacket();
-		}
-
 }
 
 void setColdFan(int fanSpeed) {
@@ -136,12 +127,11 @@ void setColdFan(int fanSpeed) {
 	if (fanSpeed < COLDFAN_SPEEDMIN)
 		fanSpeed = 0;
 	if (fanSpeed == coldFanSpeed)
-		return;	
+		return;
 
 	coldFanSpeed = fanSpeed;
 	ledcWrite(0, coldFanSpeed);
 	DEBUGLOG("Cold speed : %d\r\n", coldFanSpeed);
-	sendToNR(true);
 }
 
 void upColdFan() {
@@ -156,7 +146,7 @@ void downColdFan() {
 		setColdFan(coldFanSpeed - 1);
 }
 
-void setLight(bool cmd){
+void setLight(bool cmd) {
 	if (cmd == ledOn)
 		return;
 	ledOn = cmd;
@@ -180,7 +170,7 @@ void setHotFan(bool cmd) {
 	DEBUGLOG("Hot fan : %s\r\n", hotFanOn ? "On" : "Off");
 }
 
-void displayMode(){
+void displayMode() {
 	DEBUGLOG("Mode : ");
 	switch (activeMode) {
 		case mode::IDLE:
@@ -206,7 +196,7 @@ void displayMode(){
 }
 
 void setMode(mode newMode) {
-	if ((newMode == mode::IDLE) && (activeMode == mode::MISTINESS) )
+	if ((newMode == mode::IDLE) && (activeMode == mode::MISTINESS))
 		newMode = mode::REFRESH;
 	activeMode = newMode;
 	displayMode();
@@ -221,18 +211,23 @@ void setMode(mode newMode) {
 			setPeltier(false);
 			setHotFan(true);
 			setColdFan(0);
+			delay(1000);  // Attendre 1s que les fan démarrent
+
 			memMillisFlowMode = millis();
 			break;
 		case mode::MISTINESS:
 			setPeltier(true);
 			setHotFan(true);
 			setColdFan(COLDFAN_SPEEDMAX);
+			delay(1000);  // Attendre 1s que les fan démarrent
+
 			memMillisStop = millis();  // Temporise l'arrêt si Out>DewPoint
 			break;
 		case mode::REFRESH:
 			setPeltier(false);
 			setHotFan(true);
 			setColdFan(COLDFAN_SPEEDMAX);
+			delay(1000);  // Attendre 1s que les fan démarrent
 			break;
 		case mode::ERROR:
 			setPeltier(false);
@@ -279,17 +274,41 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 		case '-':
 			downColdFan();
 			break;
-		case '8':
-			if(!sht3x.softReset())
+		case 'I':
+			if (!sht3x.softReset())
 				DEBUGLOG("Failed to Reset the chip....\n");
-			if(!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz,sht3x.eRepeatability_High))
+			if (!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz, sht3x.eRepeatability_High))
 				DEBUGLOG("Failed to enter the periodic mode\n");
 			break;
-		case '9':
+		case 'O':
 			ESP.restart();
 			break;
 		case 'L':
 			setLight(!ledOn);
+			break;
+		case '4':
+			pid.kp -= 0.1;
+			DEBUGLOG("PID kP : %.3f\n", pid.kp);
+			break;
+		case '7':
+			pid.kp += 0.1;
+			DEBUGLOG("PID kP : %.3f\n", pid.kp);
+			break;
+		case '5':
+			pid.ki -= 0.1;
+			DEBUGLOG("PID kI : %.3f\n", pid.ki);
+			break;
+		case '8':
+			pid.ki += 0.1;
+			DEBUGLOG("PID kI : %.3f\n", pid.ki);
+			break;
+		case '6':
+			pid.kd -= 0.1;
+			DEBUGLOG("PID kD : %.3f\n", pid.kd);
+			break;
+		case '9':
+			pid.kd += 0.1;
+			DEBUGLOG("PID kD : %.3f\n", pid.kd);
 			break;
 		case '?':
 			DEBUGLOG("?        Help\r\n");
@@ -305,9 +324,14 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			DEBUGLOG("1        Mistiness Mode\r\n");
 			DEBUGLOG("r        REFRESH Mode\r\n");
 			DEBUGLOG("f        FLOW Mode\r\n");
+			DEBUGLOG("I        Init sht3x\r\n");
+			DEBUGLOG("O        Restart ESP\r\n");
 			DEBUGLOG("Peltier : %s\r\n", peltierOn ? "On" : "Off");
 			DEBUGLOG("Hot fan : %s\r\n", hotFanOn ? "On" : "Off");
 			DEBUGLOG("Cold speed : %d\r\n", coldFanSpeed);
+			DEBUGLOG("PID kP : %.3f\n", pid.kp);
+			DEBUGLOG("PID kI : %.3f\n", pid.ki);
+			DEBUGLOG("PID kD : %.3f\n", pid.kd);
 			displayMode();
 	}
 }
@@ -316,7 +340,7 @@ void sendToTeleplot() {
 	static char buffer[300];
 	static WiFiUDP udpPlot;
 
-	sprintf(buffer, "temperature:%3.1f\nhumidity:%3.1f\ndewPoint:%3.1f\ntempCold:%3.1f\ntempHot:%3.1f\ntempOut:%3.1f\ntempOutRaw:%3.1f\nfanSpeed:%d\nTimerStop:%d\ndelta:%3.1f\nregul:%d\nTimerRegul:%d\n",
+	sprintf(buffer, "temperature:%.2f\nhumidity:%.2f\ndewPoint:%.2f\ntempCold:%.2f\ntempHot:%.2f\ntempOut:%.2f\ntempOutRaw:%.2f\nfanSpeed:%d\nTimerStop:%d\ndelta:%3.2f\nregul:%d\n",
 			temperature,
 			humidity,
 			tempDewPoint,
@@ -327,8 +351,21 @@ void sendToTeleplot() {
 			coldFanSpeed,
 			(DELAY_STOP + memMillisStop - millis()) / 1000,
 			tempDelta,
-			regul,
-			(DELAY_REGUL + memMillisRegul - millis()) /1000);
+			regul);
+	udpPlot.beginPacket(broadcastIP, PORTPLOT);
+	udpPlot.print(buffer);
+	udpPlot.endPacket();
+}
+
+void PIDToTeleplot() {
+	static char buffer[100];
+	static WiFiUDP udpPlot;
+
+	sprintf(buffer, "PID_p:%.3f\nPID_i:%.3f\nPID_d:%.3f\nPID:%.3f\n",
+			pid.getP(),
+			pid.getI(),
+			pid.getD(),
+			pid.getPID());
 	udpPlot.beginPacket(broadcastIP, PORTPLOT);
 	udpPlot.print(buffer);
 	udpPlot.endPacket();
@@ -372,9 +409,9 @@ void setup() {
 	ArduinoOTA.begin();
 
 	// Init pin
-	pinMode(TEMPCOLD_PIN,INPUT);
-	pinMode(TEMPHOT_PIN,INPUT);
-	pinMode(TEMPOUT_PIN,INPUT);
+	pinMode(TEMPCOLD_PIN, INPUT);
+	pinMode(TEMPHOT_PIN, INPUT);
+	pinMode(TEMPOUT_PIN, INPUT);
 	pinMode(HOTFAN_PIN, OUTPUT);
 	pinMode(PELTIER_PIN, OUTPUT);
 	pinMode(COLDFAN_PIN, OUTPUT);
@@ -383,14 +420,14 @@ void setup() {
 	ledcSetup(0, 25000, 5);
 	ledcAttachPin(COLDFAN_PIN, 0);
 
-	Wire.setPins(SHT_SDA,SHT_SCL);
+	Wire.setPins(SHT_SDA, SHT_SCL);
 	DEBUGLOG("Init SHT3x\n");
 	if (sht3x.begin() != 0)
 		DEBUGLOG("Failed to Initialize the chip....\n");
-	if(!sht3x.softReset())
+	if (!sht3x.softReset())
 		DEBUGLOG("Failed to Reset the chip....\n");
-	if(!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz,sht3x.eRepeatability_High))
-    	DEBUGLOG("Failed to enter the periodic mode\n");
+	if (!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz, sht3x.eRepeatability_High))
+		DEBUGLOG("Failed to enter the periodic mode\n");
 
 	DEBUGLOG("Setup complet\n");
 	setMode(mode::REFRESH);
@@ -409,46 +446,34 @@ void loop() {
 	if (tempOut < tempOutMin)
 		tempOutMin = tempOut;
 	DFRobot_SHT3x::sRHAndTemp_t data = sht3x.readTemperatureAndHumidity();
-	if(data.ERR == 0){
+	if (data.ERR == 0) {
 		humidity = simpleKalmanFilterHumidity.updateEstimate(data.Humidity);
 		temperature = data.TemperatureC;
 		tempDewPoint = sht3x.computeDewPoint(temperature, humidity);
-		tempDelta = simpleKalmanFilterDelta.updateEstimate(tempDewPoint - DEWPOINT_OFFSET - tempOut);
-	}
-	else{
-    	DEBUGLOG("Failed to read Data\n");
-		// DEBUGLOG("Init SHT3x\n");
-		// if (sht3x.begin() != 0)
-		// 	DEBUGLOG("Failed to Initialize the chip....\n");
-		// if(!sht3x.softReset())
-		// 	DEBUGLOG("Failed to Reset the chip....\n");
-		// if(!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz,sht3x.eRepeatability_High))
-		// 	DEBUGLOG("Failed to enter the periodic mode\n");
+		tempDelta = tempDewPoint - DEWPOINT_OFFSET - tempOut;
+	} else {
+		DEBUGLOG("Failed to read Data\n");
 		setMode(mode::ERROR);
 	}
 
 	switch (activeMode) {
 		case mode::IDLE:
-			if (millis() - memMillisIDLEMode>DELAY_REFLOW)
+			if (millis() - memMillisIDLEMode > DELAY_REFLOW)
 				setMode(mode::FLOW);
 			break;
 		case mode::FLOW:
-			if (millis() - memMillisFlowMode>DELAY_FLOW)
+			if (millis() - memMillisFlowMode > DELAY_FLOW)
 				setMode(mode::IDLE);
 			break;
 		case mode::MISTINESS:
-			regul = tempDelta / 0.4;
-			regul = (regul>0)?floor(regul):ceil(regul);
-			if ((regul != 0) && (millis() - memMillisRegul > DELAY_REGUL )){
-				memMillisRegul = millis();
-				setColdFan((coldFanSpeed + regul)>=COLDFAN_SPEEDMIN?(coldFanSpeed + regul):COLDFAN_SPEEDMIN);
-			}
+			regul = COLDFAN_SPEEDMIN + pid.compute(tempDelta);
+			setColdFan(constrain(regul, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX));
 
-			if ((regul>=0) || (coldFanSpeed > COLDFAN_SPEEDMIN))
-				memMillisStop = millis();  // Si en dessous du DewPoint, Temporise l'arrêt
+			if (regul >= COLDFAN_SPEEDMIN)
+				memMillisStop = millis();               // Si en dessous du DewPoint, Temporise l'arrêt
 			if (millis() - memMillisStop > DELAY_STOP)  // si 2 min au dessus du DewPoint et vitesse au minimum alors arrêt
 				setMode(mode::REFRESH);
-			
+
 			if (tempHot > 54)  // Si TempHot trop chaud alors arrêt
 				setMode(mode::REFRESH);
 			break;
@@ -465,6 +490,7 @@ void loop() {
 	}
 
 	sendToTeleplot();
+	PIDToTeleplot();
 	sendToNR();
 	ArduinoOTA.handle();
 
