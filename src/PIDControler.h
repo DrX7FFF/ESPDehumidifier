@@ -17,14 +17,13 @@ public:
 	double compute(double erreur) {
 		proportionnel = kp * erreur;
 
-		sommeErreur += erreur;
+		integral += ki*erreur;
 		if (proportionnel>2*(sortieMax - sortieMin))
-			sommeErreur = sortieMax / ki;
+			integral = sortieMax;
 		if (proportionnel<2*(sortieMin - sortieMax))
-			sommeErreur = sortieMin / ki;
+			integral = sortieMin;
 		
-		sommeErreur = constrain(sommeErreur, sortieMin / ki, sortieMax / ki);
-		integral = ki * sommeErreur;
+		integral = constrain(integral, sortieMin , sortieMax );
 
 		derivee = kd * (erreur - erreurPrec);
 		erreurPrec = erreur;
@@ -40,7 +39,6 @@ public:
 
 private:
 	double erreurPrec = 0;
-	double sommeErreur;
 	double proportionnel;
 	double integral;
 	double derivee;

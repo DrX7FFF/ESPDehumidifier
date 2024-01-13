@@ -32,8 +32,9 @@ IPAddress broadcastIP;
 #define ADCMAX 4095  // Résolution MAX
 #define VSS 3.3      // Tension MAX
 
-#define COLDFAN_SPEEDMIN 2 //2 pour 9V 3 pour 8V
-#define COLDFAN_SPEEDMAX 0x1F
+#define COLDFAN_RESOLUTION	5 //6
+#define COLDFAN_SPEEDMIN 	2 //2 pour 9V 3 pour 8V  4 pour Resolution de 6
+#define COLDFAN_SPEEDMAX 	(1<<COLDFAN_RESOLUTION)-1 // 0x1F
 
 #define TEMPHOT_MAX	54
 
@@ -47,7 +48,10 @@ IPAddress broadcastIP;
 #define FILTER_TEMP_PRECISION2 0.1
 
 DFRobot_SHT3x sht3x;
-PIDController pid(20, 0.2, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+// PIDController pid(20, 0.2, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+// PIDController pid(12.8, 0.2, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+PIDController pid(15, 0.3, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+// PIDController pid(25.6, 0.4, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);	// *2 cause résolution *2
 
 // SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
 SimpleKalmanFilter simpleKalmanFilterHot(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
@@ -423,7 +427,7 @@ void setup() {
 	pinMode(COLDFAN_PIN, OUTPUT);
 	pinMode(LIGHT_PIN, OUTPUT);
 	setLight(false);
-	ledcSetup(0, 25000, 5);
+	ledcSetup(0, 25000, COLDFAN_RESOLUTION);
 	ledcAttachPin(COLDFAN_PIN, 0);
 
 	Wire.setPins(SHT_SDA, SHT_SCL);
