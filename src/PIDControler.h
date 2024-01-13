@@ -18,9 +18,14 @@ public:
 		// Calcul des termes PID
 		proportionnel = kp * erreur;
 
+		// if (rampUp) {
+		// 	if (erreur >= 0)
+		// 		rampUp = false;
+		// } else
+			sommeErreur += erreur;
+		
 		// Limiter la somme d'erreur pour éviter le "windup"
-		sommeErreur += erreur;
-		sommeErreur = constrain(sommeErreur, -100, 100);
+		sommeErreur = constrain(sommeErreur, -2 / ki, 2 / ki);
 		integral = ki * sommeErreur;
 
 		derivee = kd * (erreur - erreurPrec);
@@ -45,4 +50,5 @@ private:
 	double integral;
 	double derivee;
 	double sortiePID;
+	// bool rampUp = true;
 };

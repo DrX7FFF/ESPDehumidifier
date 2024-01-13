@@ -3,6 +3,80 @@
       {
          "type": "chart",
          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "humidity",
+               "sourceNames": [
+                  "humidity"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "humidity",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "tempCold",
+               "sourceNames": [
+                  "tempCold"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "tempCold",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            },
+            {
+               "name": "temperature",
+               "sourceNames": [
+                  "temperature"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "temperature",
+                  "stroke": "rgba(52,152,219,1)",
+                  "fill": "rgba(52,152,219,0.1)"
+               },
+               "type": "number"
+            },
+            {
+               "name": "tempHot",
+               "sourceNames": [
+                  "tempHot"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "tempHot",
+                  "stroke": "rgba(46,204,113,1)",
+                  "fill": "rgba(46,204,113,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
             "h": 6,
             "w": 6,
             "x": 0,
@@ -162,5 +236,5 @@
          ]
       }
    ],
-   "viewDuration": "900"
+   "viewDuration": "300"
 }
