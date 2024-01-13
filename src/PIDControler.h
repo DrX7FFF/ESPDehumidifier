@@ -17,19 +17,19 @@ public:
 	double compute(double erreur) {
 		proportionnel = kp * erreur;
 
-		// le proportionnel compense plus que la plage de l'intégral alors on réinitialise l'intégrale pour l'ignorer
-		if (abs(proportionnel)> 2*(sortieMax - sortieMin))
-			sommeErreur = 0;
-		else{
-			sommeErreur += erreur;
-			sommeErreur = constrain(sommeErreur, (sortieMin - sortieMax) / ki, (sortieMax - sortieMin) / ki);
-		}
+		sommeErreur += erreur;
+		if (proportionnel>2*(sortieMax - sortieMin))
+			sommeErreur = sortieMax / ki;
+		if (proportionnel<2*(sortieMin - sortieMax))
+			sommeErreur = sortieMin / ki;
+		
+		sommeErreur = constrain(sommeErreur, sortieMin / ki, sortieMax / ki);
 		integral = ki * sommeErreur;
 
 		derivee = kd * (erreur - erreurPrec);
 		erreurPrec = erreur;
 
-		sortiePID = constrain(sortieMin + proportionnel + integral + derivee, sortieMin, sortieMax);
+		sortiePID = constrain(proportionnel + integral + derivee, sortieMin, sortieMax);
 		return sortiePID;
 	}
 
