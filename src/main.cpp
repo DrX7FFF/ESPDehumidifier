@@ -14,7 +14,7 @@
 #define PORTNR 8888
 IPAddress broadcastIP;
 
-#define LIGHT_PIN 25
+#define LIGHT_PIN 23
 #define PELTIER_PIN 4
 #define HOTFAN_PIN 16
 #define COLDFAN_PIN 17
