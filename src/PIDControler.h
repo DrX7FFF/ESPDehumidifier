@@ -7,7 +7,7 @@ public:
 	double kd;
 
 	PIDController(double kp, double ki, double kd,double sortieMin, double sortieMax)
-		: kp(kp), ki(ki), kd(kd), sortieMin(sortieMin), sortieMax(sortieMax) {
+		: kp(kp), ki(ki), kd(kd), sortieMin(sortieMin), sortieMax(sortieMax), integral(sortieMin) {
 	}
 
 	double compute(float lecture, float consigne) {
@@ -18,11 +18,6 @@ public:
 		proportionnel = kp * erreur;
 
 		integral += ki*erreur;
-		if (proportionnel>2*(sortieMax - sortieMin))
-			integral = sortieMax;
-		if (proportionnel<2*(sortieMin - sortieMax))
-			integral = sortieMin;
-		
 		integral = constrain(integral, sortieMin , sortieMax );
 
 		derivee = kd * (erreur - erreurPrec);
@@ -36,6 +31,7 @@ public:
 	double getI() const { return integral; }
 	double getD() const { return derivee; }
 	double getPID() const { return sortiePID; }
+	double getDelta() {return erreurPrec; }
 
 private:
 	double erreurPrec = 0;

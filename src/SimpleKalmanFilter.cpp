@@ -8,12 +8,9 @@
 #include "SimpleKalmanFilter.h"
 #include <math.h>
 
-SimpleKalmanFilter::SimpleKalmanFilter(float mea_e, float est_e, float q)
-{
-  _err_measure=mea_e;
-  _err_estimate=est_e;
-  _q = q;
-}
+SimpleKalmanFilter::SimpleKalmanFilter(float mea_e, float est_e, float q) : _err_measure(mea_e), _err_estimate(est_e), _q(q) {}
+
+SimpleKalmanFilter::SimpleKalmanFilter(float mea_e, float q) : SimpleKalmanFilter(mea_e,mea_e,q) {}
 
 float SimpleKalmanFilter::updateEstimate(float mea)
 {

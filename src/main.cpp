@@ -10,7 +10,6 @@
 #include "PIDControler.h"
 #include "SimpleKalmanFilter.h"
 
-
 #define PORTPLOT 47269
 #define PORTNR 8888
 IPAddress broadcastIP;
@@ -32,37 +31,29 @@ IPAddress broadcastIP;
 #define ADCMAX 4095  // Résolution MAX
 #define VSS 3.3      // Tension MAX
 
-#define COLDFAN_RESOLUTION	5 //6
-#define COLDFAN_SPEEDMIN 	2 //2 pour 9V 3 pour 8V  4 pour Resolution de 6
-#define COLDFAN_SPEEDMAX 	(1<<COLDFAN_RESOLUTION)-1 // 0x1F
+#define COLDFAN_RESOLUTION 5                            // 6
+#define COLDFAN_SPEEDMIN 2                              // 2 pour 9V 3 pour 8V  4 pour Resolution de 6
+#define COLDFAN_SPEEDMAX (1 << COLDFAN_RESOLUTION) - 1  // 0x1F
 
-#define TEMPHOT_MAX	54
+#define TEMPHOT_MAX 54
 
 #define DELAY_STOP 600000     // 180000	// 3 minutes (1.5 min pour le démarrage)
 #define DELAY_FLOW 120000     // 5 minutes
 #define DELAY_REFLOW 3600000  // 60 minutes
 
-#define FILTER_TEMP_PRECISION 0.4
-#define FILTER_TEMP_SPEED 0.01
 #define DEWPOINT_OFFSET -1
-#define FILTER_TEMP_PRECISION2 0.1
 
 DFRobot_SHT3x sht3x;
-// PIDController pid(20, 0.2, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
-// PIDController pid(12.8, 0.2, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
-PIDController pid(15, 0.3, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
-// PIDController pid(25.6, 0.4, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);	// *2 cause résolution *2
-
-// SimpleKalmanFilter simpleKalmanFilterHot(0.5, 0.5, 0.01);
-SimpleKalmanFilter simpleKalmanFilterHot(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
-SimpleKalmanFilter simpleKalmanFilterCold(FILTER_TEMP_PRECISION, FILTER_TEMP_PRECISION, FILTER_TEMP_SPEED);
-SimpleKalmanFilter simpleKalmanFilterOut(FILTER_TEMP_PRECISION2, FILTER_TEMP_PRECISION2, 0.05);
-SimpleKalmanFilter simpleKalmanFilterHumidity(0.2, 0.2, 0.4);  // Très proche du réel et filtre les petites variations
+PIDController pid(15, 0.1, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+SimpleKalmanFilter FilterHot(0.1, 0.01);
+SimpleKalmanFilter FilterCold(0.1, 0.01);
+SimpleKalmanFilter FilterOut(0.1, 0.05);
+SimpleKalmanFilter FilterDewPoint(0.1, 0.05);
+SimpleKalmanFilter FilterHumidity(0.2, 0.4);  // Très proche du réel et filtre les petites variations
 
 uint8_t coldFanSpeed = 0;
 bool pushJSON = false;
 bool manu = false;
-bool fixTarget = false;
 
 uint32_t memMillisStop = 0;
 uint32_t memMillisFlowMode = 0;
@@ -73,11 +64,7 @@ float humidity;
 float tempCold;
 float tempHot;
 float tempOut;
-float tempOutMax = -100;
-float tempOutMin = 100;
 float tempDewPoint;
-float tempDelta;
-int regul;
 
 enum mode {
 	IDLE,
@@ -115,17 +102,15 @@ void sendToNR() {
 				tempDewPoint,
 				tempCold,
 				tempHot,
-				(tempOutMax + tempOutMin) / 2,
+				tempOut,
 				coldFanSpeed);
-		tempOutMax = tempOut;
-		tempOutMin = tempOut;
 		udpNR.beginPacket(broadcastIP, PORTNR);
 		udpNR.print(buffer);
 		udpNR.endPacket();
 	}
 }
 
-void setColdFan(int fanSpeed) {
+void setColdFan(uint8_t fanSpeed) {
 	if (fanSpeed > COLDFAN_SPEEDMAX)
 		fanSpeed = COLDFAN_SPEEDMAX;
 	if (fanSpeed < COLDFAN_SPEEDMIN)
@@ -313,13 +298,8 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			manu = !manu;
 			DEBUGLOG("Manu : %s\n", manu ? "On" : "Off");
 			break;
-		case 'F' :
-			fixTarget = !fixTarget;
-			DEBUGLOG("FixTarget : %s\n", fixTarget ? "On" : "Off");
-			break;
 		case '?':
 			DEBUGLOG("?        Help\n");
-			DEBUGLOG("9        Restart\n");
 			DEBUGLOG("H        Hot fan swap\n");
 			DEBUGLOG("P        Peltier swap\n");
 			DEBUGLOG("J        Push JSON\n");
@@ -334,7 +314,9 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			DEBUGLOG("I        Init sht3x\n");
 			DEBUGLOG("O        Restart ESP\n");
 			DEBUGLOG("M        Manu, no PID\n");
-			DEBUGLOG("F        Fix target\n");
+			DEBUGLOG("7-4      PID kP\n");
+			DEBUGLOG("8-5      PID kI\n");
+			DEBUGLOG("9-6      PID kD\n");
 			DEBUGLOG("Peltier : %s\n", digitalRead(PELTIER_PIN) ? "On" : "Off");
 			DEBUGLOG("Hot fan : %s\n", digitalRead(HOTFAN_PIN) ? "On" : "Off");
 			DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
@@ -342,7 +324,6 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			DEBUGLOG("PID kI : %.3f\n", pid.ki);
 			DEBUGLOG("PID kD : %.3f\n", pid.kd);
 			DEBUGLOG("Manu : %s\n", manu ? "On" : "Off");
-			DEBUGLOG("FixTarget : %s\n", fixTarget ? "On" : "Off");
 			displayMode();
 	}
 }
@@ -351,7 +332,7 @@ void sendToTeleplot() {
 	static char buffer[300];
 	static WiFiUDP udpPlot;
 
-	sprintf(buffer, "temperature:%.2f\nhumidity:%.2f\ndewPoint:%.2f\ntempCold:%.2f\ntempHot:%.2f\ntempOut:%.2f\nfanSpeed:%d\nTimerStop:%d\ndelta:%3.2f\nregul:%d\n",
+	sprintf(buffer, "temperature:%.2f\nhumidity:%.2f\ndewPoint:%.2f\ntempCold:%.2f\ntempHot:%.2f\ntempOut:%.2f\nfanSpeed:%d\nTimerStop:%d\nPID_p:%.3f\nPID_i:%.3f\nPID_d:%.3f\nPID:%.3f\ndelta:%.3f\n",
 			temperature,
 			humidity,
 			tempDewPoint,
@@ -360,22 +341,11 @@ void sendToTeleplot() {
 			tempOut,
 			coldFanSpeed,
 			(DELAY_STOP + memMillisStop - millis()) / 1000,
-			tempDelta,
-			regul);
-	udpPlot.beginPacket(broadcastIP, PORTPLOT);
-	udpPlot.print(buffer);
-	udpPlot.endPacket();
-}
-
-void PIDToTeleplot() {
-	static char buffer[100];
-	static WiFiUDP udpPlot;
-
-	sprintf(buffer, "PID_p:%.3f\nPID_i:%.3f\nPID_d:%.3f\nPID:%.3f\n",
 			pid.getP(),
 			pid.getI(),
 			pid.getD(),
-			pid.getPID());
+			pid.getPID(),
+			pid.getDelta());
 	udpPlot.beginPacket(broadcastIP, PORTPLOT);
 	udpPlot.print(buffer);
 	udpPlot.endPacket();
@@ -443,28 +413,22 @@ void setup() {
 }
 
 void loop() {
+	uint8_t regul;
 	// Read values
-	tempCold = simpleKalmanFilterCold.updateEstimate(readTemp(TEMPCOLD_PIN));
-	tempHot = simpleKalmanFilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
-	tempOut = simpleKalmanFilterOut.updateEstimate(readTemp(TEMPOUT_PIN));
-
-	if (tempOut > tempOutMax)
-		tempOutMax = tempOut;
-	if (tempOut < tempOutMin)
-		tempOutMin = tempOut;
-
+	tempCold = FilterCold.updateEstimate(readTemp(TEMPCOLD_PIN));
+	tempHot = FilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
+	tempOut = FilterOut.updateEstimate(readTemp(TEMPOUT_PIN));
 	DFRobot_SHT3x::sRHAndTemp_t data = sht3x.readTemperatureAndHumidity();
 	if (data.ERR == 0) {
-		humidity = simpleKalmanFilterHumidity.updateEstimate(data.Humidity);
+		humidity = FilterHumidity.updateEstimate(data.Humidity);
 		temperature = data.TemperatureC;
-		if (!fixTarget)
-			tempDewPoint = sht3x.computeDewPoint(temperature, humidity);
-		tempDelta = tempDewPoint + DEWPOINT_OFFSET - tempOut;
+		tempDewPoint = FilterDewPoint.updateEstimate(sht3x.computeDewPoint(temperature, humidity));
 	} else {
 		DEBUGLOG("Failed to read Data\n");
 		setMode(mode::ERROR);
 	}
 
+	// Traitement du mode
 	switch (activeMode) {
 		case mode::IDLE:
 			if (millis() - memMillisIDLEMode > DELAY_REFLOW)
@@ -475,16 +439,16 @@ void loop() {
 				setMode(mode::IDLE);
 			break;
 		case mode::MISTINESS:
-			regul = pid.compute(tempDelta);
+			if (tempHot > TEMPHOT_MAX)  // Si TempHot trop chaud alors arrêt
+				setMode(mode::REFRESH);
+
+			regul = pid.compute(tempDewPoint + DEWPOINT_OFFSET - tempOut);
 			if (!manu)
 				setColdFan(regul);
 
 			if ((regul >= COLDFAN_SPEEDMIN) || manu)
-				memMillisStop = millis();               // Si en dessous du DewPoint, Temporise l'arrêt
+				memMillisStop = millis();               // Si régul bien en dessous de la vitesse minimum
 			if (millis() - memMillisStop > DELAY_STOP)  // si 2 min au dessus du DewPoint et vitesse au minimum alors arrêt
-				setMode(mode::REFRESH);
-
-			if (tempHot > TEMPHOT_MAX)  // Si TempHot trop chaud alors arrêt
 				setMode(mode::REFRESH);
 			break;
 		case mode::REFRESH:
@@ -502,7 +466,6 @@ void loop() {
 		memMillisStop = millis();  // Reset Timer arrêt
 
 	sendToTeleplot();
-	PIDToTeleplot();
 	sendToNR();
 	ArduinoOTA.handle();
 

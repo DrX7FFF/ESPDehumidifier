@@ -3,8 +3,8 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 5,
-            "w": 6,
+            "h": 6,
+            "w": 4,
             "x": 0,
             "y": 0
          },
@@ -27,12 +27,25 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 5,
-            "w": 6,
+            "h": 6,
+            "w": 8,
             "x": 0,
             "y": 0
          },
          "series": [
+            {
+               "name": "tempHot",
+               "sourceNames": [
+                  "tempHot"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "tempHot",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            },
             {
                "name": "tempCold",
                "sourceNames": [
@@ -41,8 +54,8 @@
                "formula": "",
                "options": {
                   "_serie": "tempCold",
-                  "stroke": "rgba(231,76,60,1)",
-                  "fill": "rgba(231,76,60,0.1)"
+                  "stroke": "rgba(52,152,219,1)",
+                  "fill": "rgba(52,152,219,0.1)"
                },
                "type": "number"
             },
@@ -54,21 +67,21 @@
                "formula": "",
                "options": {
                   "_serie": "temperature",
-                  "stroke": "rgba(52,152,219,1)",
-                  "fill": "rgba(52,152,219,0.1)"
+                  "stroke": "rgba(46,204,113,1)",
+                  "fill": "rgba(46,204,113,0.1)"
                },
                "type": "number"
             },
             {
-               "name": "tempHot",
+               "name": "tempOut",
                "sourceNames": [
-                  "tempHot"
+                  "tempOut"
                ],
                "formula": "",
                "options": {
-                  "_serie": "tempHot",
-                  "stroke": "rgba(46,204,113,1)",
-                  "fill": "rgba(46,204,113,0.1)"
+                  "_serie": "tempOut",
+                  "stroke": "rgba(155,89,182,1)",
+                  "fill": "rgba(155,89,182,0.1)"
                },
                "type": "number"
             }
@@ -77,7 +90,7 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 10,
             "w": 6,
             "x": 0,
             "y": 0
@@ -108,13 +121,26 @@
                   "fill": "rgba(52,152,219,0.1)"
                },
                "type": "number"
+            },
+            {
+               "name": "tempCold",
+               "sourceNames": [
+                  "tempCold"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "tempCold",
+                  "stroke": "rgba(46,204,113,1)",
+                  "fill": "rgba(46,204,113,0.1)"
+               },
+               "type": "number"
             }
          ]
       },
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 5,
             "w": 6,
             "x": 0,
             "y": 0
@@ -138,38 +164,12 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 5,
             "w": 6,
             "x": 0,
             "y": 0
          },
          "series": [
-            {
-               "name": "regul",
-               "sourceNames": [
-                  "regul"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "regul",
-                  "stroke": "rgba(231,76,60,1)",
-                  "fill": "rgba(231,76,60,0.1)"
-               },
-               "type": "number"
-            },
-            {
-               "name": "PID",
-               "sourceNames": [
-                  "PID"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "PID",
-                  "stroke": "rgba(52,152,219,1)",
-                  "fill": "rgba(52,152,219,0.1)"
-               },
-               "type": "number"
-            },
             {
                "name": "fanSpeed",
                "sourceNames": [
@@ -178,30 +178,6 @@
                "formula": "",
                "options": {
                   "_serie": "fanSpeed",
-                  "stroke": "rgba(46,204,113,1)",
-                  "fill": "rgba(46,204,113,0.1)"
-               },
-               "type": "number"
-            }
-         ]
-      },
-      {
-         "type": "chart",
-         "gridPos": {
-            "h": 6,
-            "w": 6,
-            "x": 0,
-            "y": 0
-         },
-         "series": [
-            {
-               "name": "PID_p",
-               "sourceNames": [
-                  "PID_p"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "PID_p",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -219,22 +195,9 @@
                   "fill": "rgba(52,152,219,0.1)"
                },
                "type": "number"
-            },
-            {
-               "name": "PID_d",
-               "sourceNames": [
-                  "PID_d"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "PID_d",
-                  "stroke": "rgba(46,204,113,1)",
-                  "fill": "rgba(46,204,113,0.1)"
-               },
-               "type": "number"
             }
          ]
       }
    ],
-   "viewDuration": "300"
+   "viewDuration": "1800"
 }
