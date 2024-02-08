@@ -27,6 +27,7 @@ public:
 		return sortiePID;
 	}
 
+	bool getUnderCapacity() {return (proportionnel + integral + derivee)<sortiePID; }
 	double getP() const { return proportionnel; }
 	double getI() const { return integral; }
 	double getD() const { return derivee; }

@@ -37,14 +37,17 @@ IPAddress broadcastIP;
 
 #define TEMPHOT_MAX 54
 
-#define DELAY_STOP 600000     // 180000	// 3 minutes (1.5 min pour le démarrage)
-#define DELAY_FLOW 120000     // 5 minutes
-#define DELAY_REFLOW 3600000  // 60 minutes
+#define DELAY_STOP 600000     // 10 minutes (1.5 min pour le démarrage)
+#define DELAY_FLOW 120000     // 2 minutes
+// #define DELAY_REFLOW 3600000  // 60 minutes
+#define DELAY_REFLOW 18000000  // 5H
 
 #define DEWPOINT_OFFSET -1
 
 DFRobot_SHT3x sht3x;
-PIDController pid(15, 0.1, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+// 0.1 sinon trop rapide pa rapoort au temps de stabilisation de la temperature Colde
+//PIDController pid(15, 0.1, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+PIDController pid(6, 0.05, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
 SimpleKalmanFilter FilterHot(0.1, 0.01);
 SimpleKalmanFilter FilterCold(0.1, 0.01);
 SimpleKalmanFilter FilterOut(0.1, 0.05);
@@ -83,7 +86,7 @@ float readTemp(uint8_t pin) {
 
 	float T = 1 / (1 / T0 + log(Rt / R0) / BETA);  // Temperature in Kelvin
 	float Tc = T - 273.15;                         // Celsius
-	Tc = Tc + 1.5;                                 // Correction ancienne valeur 1.5
+//	Tc = Tc + 1.5;                                 // Correction ancienne valeur 1.5
 	return Tc;
 }
 
@@ -95,7 +98,7 @@ void sendToNR() {
 	if (millis() - memMillis > 300000 || pushJSON) {
 		memMillis = millis();
 		pushJSON = false;
-		sprintf(buffer, "{\"temperature\":%.1f,\"humidity\":%.1f,\"absHumidity\":%.1f,\"dewPoint\":%.1f,\"tempCold\":%.1f,\"tempHot\":%.1f,\"tempOut\":%.1f,\"coldFanSpeed\":%d}\0",
+		sprintf(buffer, "{\"temperature\":%.1f,\"humidity\":%.1f,\"absHumidity\":%.1f,\"dewPoint\":%.1f,\"tempCold\":%.1f,\"tempHot\":%.1f,\"tempOut\":%.1f,\"coldFanSpeed\":%.1f}\0",
 				temperature,
 				humidity,
 				sht3x.computeAbsoluteHumidity(temperature, humidity),
@@ -103,7 +106,7 @@ void sendToNR() {
 				tempCold,
 				tempHot,
 				tempOut,
-				coldFanSpeed);
+				activeMode==mode::MISTINESS ? pid.getI() : coldFanSpeed);
 		udpNR.beginPacket(broadcastIP, PORTNR);
 		udpNR.print(buffer);
 		udpNR.endPacket();
@@ -120,7 +123,6 @@ void setColdFan(uint8_t fanSpeed) {
 
 	coldFanSpeed = fanSpeed;
 	ledcWrite(0, coldFanSpeed);
-	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
 void upColdFan() {
@@ -128,11 +130,13 @@ void upColdFan() {
 		setColdFan(COLDFAN_SPEEDMAX);
 	else
 		setColdFan(coldFanSpeed + 1);
+	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
 void downColdFan() {
 	if (coldFanSpeed > COLDFAN_SPEEDMIN)
 		setColdFan(coldFanSpeed - 1);
+	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
 void setLight(bool cmd) {
@@ -196,7 +200,7 @@ void setMode(mode newMode) {
 		case mode::FLOW:
 			setPeltier(false);
 			setHotFan(true);
-			setColdFan(0);
+			setColdFan(COLDFAN_SPEEDMAX);
 			delay(1000);  // Attendre 1s que les fan démarrent
 
 			memMillisFlowMode = millis();
@@ -220,6 +224,7 @@ void setMode(mode newMode) {
 		default:
 			break;
 	}
+	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
 void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
@@ -279,11 +284,11 @@ void onReceiveDebug(void *arg, AsyncClient *client, void *data, size_t len) {
 			DEBUGLOG("PID kP : %.3f\n", pid.kp);
 			break;
 		case '5':
-			pid.ki -= 0.1;
+			pid.ki -= 0.01;
 			DEBUGLOG("PID kI : %.3f\n", pid.ki);
 			break;
 		case '8':
-			pid.ki += 0.1;
+			pid.ki += 0.01;
 			DEBUGLOG("PID kI : %.3f\n", pid.ki);
 			break;
 		case '6':
@@ -446,7 +451,7 @@ void loop() {
 			if (!manu)
 				setColdFan(regul);
 
-			if ((regul >= COLDFAN_SPEEDMIN) || manu)
+			if (!pid.getUnderCapacity() || manu)
 				memMillisStop = millis();               // Si régul bien en dessous de la vitesse minimum
 			if (millis() - memMillisStop > DELAY_STOP)  // si 2 min au dessus du DewPoint et vitesse au minimum alors arrêt
 				setMode(mode::REFRESH);
