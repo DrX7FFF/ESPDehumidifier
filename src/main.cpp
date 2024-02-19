@@ -51,6 +51,7 @@ PIDController pid(6, 0.05, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
 SimpleKalmanFilter FilterHot(0.1, 0.01);
 SimpleKalmanFilter FilterCold(0.1, 0.01);
 SimpleKalmanFilter FilterOut(0.1, 0.05);
+// SimpleKalmanFilter FilterOut(0.1, 0.01);
 SimpleKalmanFilter FilterDewPoint(0.1, 0.05);
 SimpleKalmanFilter FilterHumidity(0.2, 0.4);  // Très proche du réel et filtre les petites variations
 
@@ -188,42 +189,45 @@ void displayMode() {
 void setMode(mode newMode) {
 	if ((newMode == mode::IDLE) && (activeMode == mode::MISTINESS))
 		newMode = mode::REFRESH;
-	activeMode = newMode;
-	displayMode();
-	switch (activeMode) {
+	switch (newMode) {
 		case mode::IDLE:
+			memMillisIDLEMode = millis();
+			activeMode = newMode;
 			setPeltier(false);
 			setHotFan(false);
 			setColdFan(0);
-			memMillisIDLEMode = millis();
 			break;
 		case mode::FLOW:
+			memMillisFlowMode = millis();
+			activeMode = newMode;
 			setPeltier(false);
 			setHotFan(true);
 			setColdFan(COLDFAN_SPEEDMAX);
 			delay(1000);  // Attendre 1s que les fan démarrent
-
-			memMillisFlowMode = millis();
 			break;
 		case mode::MISTINESS:
+			activeMode = newMode;
 			setPeltier(true);
 			setHotFan(true);
 			setColdFan(COLDFAN_SPEEDMAX);
 			delay(1000);  // Attendre 1s que les fan démarrent
 			break;
 		case mode::REFRESH:
+			activeMode = newMode;
 			setPeltier(false);
 			setHotFan(true);
 			setColdFan(COLDFAN_SPEEDMAX);
 			delay(1000);  // Attendre 1s que les fan démarrent
 			break;
 		case mode::ERROR:
+			activeMode = newMode;
 			setPeltier(false);
 			setHotFan(false);
 			setColdFan(0);
 		default:
 			break;
 	}
+	displayMode();
 	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
