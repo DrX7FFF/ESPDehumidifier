@@ -45,9 +45,7 @@ IPAddress broadcastIP;
 #define DEWPOINT_OFFSET -1
 
 DFRobot_SHT3x sht3x;
-// 0.1 sinon trop rapide pa rapoort au temps de stabilisation de la temperature Colde
-//PIDController pid(15, 0.1, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
-PIDController pid(6, 0.05, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
+PIDController pid(6.5, 0.06, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
 SimpleKalmanFilter FilterHot(0.1, 0.01);
 SimpleKalmanFilter FilterCold(0.1, 0.01);
 SimpleKalmanFilter FilterOut(0.1, 0.05);
