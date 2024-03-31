@@ -22,6 +22,20 @@ Recalculer les résistance du pont diviseur pour se retrouver sur une températu
 YCCFAN
 YDL3007S05s
 
+CJY 12V 0.2A 80x80x25 8025
+32 CFM		54M3/h
+39.8 CFM	67
+43 CFM		73	GDSTime
+53 CFM		90	Sunon
+
+
+Sunon MC25101V2-A99
+MF25101V2-1000U-A99
+3.0 CMF
+5,1 m³/h
+12V
+
+
 
 Plus bas 37.2%
 
@@ -29,3 +43,11 @@ Plus bas 37.2%
 largeur 95 mm -> 90 mm
 hauteur 99 mm -> 90 mm
 		74 mm -> 70 mm
+
+
+107.15k		23.78°C +273.15 = 296.93°K
+106.2K 		23.76°C +273.15 = 296.91°K
+107.7K		23.7°C +273.15 = 296.28°K
+109.8K		23.52°C +273.15 = 296.67°K
+
+Cible de ventilation dans la coldRoom : 0.46 m3/H pour dissiper de 30°C vers 13°C
