@@ -23,12 +23,13 @@
 #define TEMPHOT_PIN 34   // GPIO 34 = A?, uses any valid Ax pin as you wish
 #define TEMPCOLD_PIN 35  // GPIO 35 = A7, uses any valid Ax pin as you wish
 
+#define ADCRES 10
+
 #define R1 100000    // voltage divider resistor value
 #define BETA 3950.0  // Beta value
 #define T0 298.15    // Temperature in Kelvin for 25 degree Celsius
 #define R0 100000    // Resistance of Thermistor at 25 degree Celsius 94kOhm
-#define ADCMAX 4095  // Résolution MAX
-#define VSS 3.3      // Tension MAX
+#define VSS 3300      // Tension MAX
 
 #define COLDFAN_RESOLUTION 5                            // 6
 #define COLDFAN_SPEEDMIN 2                              // 2 pour 9V 3 pour 8V  4 pour Resolution de 6
@@ -46,9 +47,6 @@
 
 DFRobot_SHT3x sht3x;
 PIDController pid(6, 0.06, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
-SimpleKalmanFilter FilterHot(0.1, 0.01);
-SimpleKalmanFilter FilterCold(0.1, 0.01);
-SimpleKalmanFilter FilterOut(0.1, 0.05);
 
 // SimpleKalmanFilter FilterOut(0.1, 0.01);
 // SimpleKalmanFilter FilterDewPoint(0.1, 0.05);
@@ -62,6 +60,16 @@ bool teleplot = false;
 uint32_t memMillisStop = 0;
 uint32_t memMillisFlowMode = 0;
 uint32_t memMillisIDLEMode = 0;
+
+#define MEASUREERROR 30
+#define PROCESSNOISE 0.22
+
+// uint16_t mvoltHot = 0;
+// uint16_t mvoltCold = 0;
+// uint16_t mvoltOut = 0;
+SimpleKalmanFilter filterVoltageHot(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
+SimpleKalmanFilter filterVoltageCold(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
+SimpleKalmanFilter filterVoltageOut(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
 
 
 float temperature;
@@ -82,16 +90,29 @@ enum mode {
 
 mode activeMode = mode::IDLE;
 
-float readTemp(uint8_t pin) {
-	float adc = ADC_LUT[analogRead(pin)];
-	float Vout = adc * VSS / ADCMAX;
-	float Rt = R1 * Vout / (VSS - Vout);
+TaskHandle_t pADCRead;
+void ADCRead( void * parameter){
+	const TickType_t taskPeriod = 10; // 20ms <--> 50Hz
+	TickType_t xLastWakeTime = xTaskGetTickCount();
+	for (;;)  {
+		// mvoltHot = (uint16_t)filterVoltageHot.updateEstimate(analogRead(TEMPHOT_PIN));
+		// mvoltCold = (uint16_t)filterVoltageCold.updateEstimate(analogRead(TEMPCOLD_PIN));
+		// mvoltOut = (uint16_t)filterVoltageOut.updateEstimate(analogRead(TEMPOUT_PIN));
+		tempHot = ADC_LUT[(uint16_t)filterVoltageHot.updateEstimate(analogRead(TEMPHOT_PIN))]/10;
+		tempCold = ADC_LUT[(uint16_t)filterVoltageCold.updateEstimate(analogRead(TEMPCOLD_PIN))]/10;
+		tempOut = ADC_LUT[(uint16_t)filterVoltageOut.updateEstimate(analogRead(TEMPOUT_PIN))]/10;
 
-	float T = 1 / (1 / T0 + log(Rt / R0) / BETA);  // Temperature in Kelvin
-	float Tc = T - 273.15;                         // Celsius
-//	Tc = Tc + 1.5;                                 // Correction ancienne valeur 1.5
-	return Tc;
+		
+		vTaskDelayUntil(&xLastWakeTime, taskPeriod);
+	}
 }
+
+// long double readTemp(uint16_t mVolt) {
+// 	float Vout = ADC_LUT[mVolt];
+// 	float Rt = R1 * Vout / (VSS - Vout);
+// 	float T = (1 / (1 / T0 + log(Rt / R0) / BETA))- 273.15;  // Temperature in Celsius
+// 	return T;
+// }
 
 void sendToNR() {
 	static char buffer[300];
@@ -105,7 +126,7 @@ void sendToNR() {
 				temperature,
 				humidity,
 				sht3x.computeAbsoluteHumidity(temperature, humidity),
-				tempDewPoint2,
+				tempDewPoint,
 				tempCold,
 				tempHot,
 				tempOut,
@@ -363,36 +384,8 @@ void sendToTeleplot() {
 void setup() {
 	DEBUGINIT(onReceiveDebug);
 	
-
 	loadIP();
 	myWifiBeginWPS();
-
-	// WiFi.begin();
-
-	// DEBUGLOG("Setup\nWait WiFi for 30s :");
-	// uint32_t mem = millis();
-	// while ((millis() - mem) < 30000 && !WiFi.isConnected()) {
-	// 	delay(1);
-	// }
-
-	// if (!WiFi.isConnected()) {
-	// 	DEBUGLOG("\nStart SmartConfig for 60s :");
-	// 	WiFi.beginSmartConfig();
-	// 	mem = millis();
-	// 	while ((millis() - mem) < 60000 && !WiFi.smartConfigDone()) {
-	// 		delay(1000);
-	// 		DEBUGLOG("/");
-	// 	}
-	// 	if (WiFi.smartConfigDone()) {
-	// 		DEBUGLOG("\nSmartConfig Done\n");
-	// 		WiFi.begin(WiFi.SSID().c_str(), WiFi.psk().c_str(), WiFi.channel(), WiFi.BSSID());
-	// 		delay(1000);
-	// 		ESP.restart();
-	// 	} else
-	// 		DEBUGLOG("\nSmartConfig Abort, continue without WiFi\n");
-	// }
-
-	ArduinoOTA.begin();
 
 	// Init pin
 	pinMode(TEMPCOLD_PIN, INPUT);
@@ -414,6 +407,12 @@ void setup() {
 	if (!sht3x.startPeriodicMode(sht3x.eMeasureFreq_10Hz, sht3x.eRepeatability_High))
 		DEBUGLOG("Failed to enter the periodic mode\n");
 
+	analogSetWidth(ADCRES);
+	analogReadResolution(ADCRES);
+	xTaskCreate(ADCRead,"ADCRead",1024,NULL,1,&pADCRead);
+
+	ArduinoOTA.begin();
+
 	DEBUGLOG("Setup complet\n");
 	setMode(mode::REFRESH);
 }
@@ -422,9 +421,9 @@ void loop() {
 	uint8_t regul;
 	// Read values
 
-	tempHot = FilterHot.updateEstimate(readTemp(TEMPHOT_PIN));
-	tempCold = FilterCold.updateEstimate(readTemp(TEMPCOLD_PIN));
-	tempOut = FilterOut.updateEstimate(readTemp(TEMPOUT_PIN));
+	// tempHot = readTemp(mvoltHot);
+	// tempCold = readTemp(mvoltCold);
+	// tempOut = readTemp(mvoltOut);
 	DFRobot_SHT3x::sRHAndTemp_t data = sht3x.readTemperatureAndHumidity();
 	if (data.ERR == 0) {
 		humidity = FilterHumidity.updateEstimate(data.Humidity);
@@ -451,7 +450,8 @@ void loop() {
 			if (tempHot > TEMPHOT_MAX)  // Si TempHot trop chaud alors arrêt
 				setMode(mode::REFRESH);
 
-			regul = pid.compute(tempDewPoint + DEWPOINT_OFFSET - tempOut);
+			// regul = pid.compute(tempDewPoint + DEWPOINT_OFFSET - tempOut);
+			regul = pid.compute(tempDewPoint + DEWPOINT_OFFSET - tempCold);
 			if (!manu)
 				setColdFan(regul);
 
