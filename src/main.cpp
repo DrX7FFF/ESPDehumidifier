@@ -42,6 +42,7 @@
 #define DELAY_FLOW 120000     // 2 minutes
 // #define DELAY_REFLOW 3600000  // 60 minutes
 #define DELAY_REFLOW 18000000  // 5H
+#define DELAY_LIGHT	60000	// 2 minutes
 
 #define DEWPOINT_OFFSET -1
 
@@ -60,6 +61,7 @@ bool teleplot = false;
 uint32_t memMillisStop = 0;
 uint32_t memMillisFlowMode = 0;
 uint32_t memMillisIDLEMode = 0;
+uint32_t memMillisLight = 0;
 
 #define MEASUREERROR 30
 #define PROCESSNOISE 0.22
@@ -146,7 +148,7 @@ void setColdFan(uint8_t fanSpeed) {
 		return;
 
 	coldFanSpeed = fanSpeed;
-	ledcWrite(0, coldFanSpeed);
+	// ledcWrite(0, coldFanSpeed);
 	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
@@ -396,8 +398,9 @@ void setup() {
 	pinMode(COLDFAN_PIN, OUTPUT);
 	pinMode(LIGHT_PIN, OUTPUT);
 	setLight(false);
-	ledcSetup(0, 25000, COLDFAN_RESOLUTION);
-	ledcAttachPin(COLDFAN_PIN, 0);
+	// ledcSetup(0, 25000, COLDFAN_RESOLUTION);
+	// ledcAttachPin(COLDFAN_PIN, 0);
+	digitalWrite(COLDFAN_PIN, false);
 
 	Wire.setPins(SHT_SDA, SHT_SCL);
 	if (sht3x.begin() != 0)
@@ -409,7 +412,7 @@ void setup() {
 
 	analogSetWidth(ADCRES);
 	analogReadResolution(ADCRES);
-	xTaskCreate(ADCRead,"ADCRead",1024,NULL,1,&pADCRead);
+	xTaskCreate(ADCRead,"ADCRead",2048,NULL,1,&pADCRead);
 
 	ArduinoOTA.begin();
 
@@ -447,8 +450,10 @@ void loop() {
 				setMode(mode::IDLE);
 			break;
 		case mode::MISTINESS:
-			if (tempHot > TEMPHOT_MAX)  // Si TempHot trop chaud alors arrêt
+			if (tempHot > TEMPHOT_MAX){  // Si TempHot trop chaud alors arrêt
+				DEBUGLOG("TOO HOT !\n");
 				setMode(mode::REFRESH);
+			}
 
 			// regul = pid.compute(tempDewPoint + DEWPOINT_OFFSET - tempOut);
 			regul = pid.compute(tempDewPoint + DEWPOINT_OFFSET - tempCold);
@@ -468,11 +473,20 @@ void loop() {
 			// Ne rien faire
 			break;
 		default:
+			DEBUGLOG("Pas de mode %u\n", activeMode);
 			setMode(mode::IDLE);
 			break;
 	}
 	if (activeMode != mode::MISTINESS)
 		memMillisStop = millis();  // Reset Timer arrêt
+
+	if (digitalRead(LIGHT_PIN)){
+		if (millis() - memMillisLight > DELAY_LIGHT)
+			setLight(false);
+	}
+	else
+		memMillisLight = millis();
+
 
 	if (teleplot)
 		sendToTeleplot();
