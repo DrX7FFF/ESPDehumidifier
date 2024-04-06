@@ -19,17 +19,17 @@
 #define COLDFAN_PIN 17
 #define SHT_SDA 18
 #define SHT_SCL 19
-#define TEMPOUT_PIN 39
+// #define TEMPOUT_PIN 39
 #define TEMPHOT_PIN 34   // GPIO 34 = A?, uses any valid Ax pin as you wish
 #define TEMPCOLD_PIN 35  // GPIO 35 = A7, uses any valid Ax pin as you wish
 
 #define ADCRES 10
 
-#define R1 100000    // voltage divider resistor value
-#define BETA 3950.0  // Beta value
-#define T0 298.15    // Temperature in Kelvin for 25 degree Celsius
-#define R0 100000    // Resistance of Thermistor at 25 degree Celsius 94kOhm
-#define VSS 3300      // Tension MAX
+// #define R1 100000    // voltage divider resistor value
+// #define BETA 3950.0  // Beta value
+// #define T0 298.15    // Temperature in Kelvin for 25 degree Celsius
+// #define R0 100000    // Resistance of Thermistor at 25 degree Celsius 94kOhm
+// #define VSS 3300      // Tension MAX
 
 #define COLDFAN_RESOLUTION 5                            // 6
 #define COLDFAN_SPEEDMIN 2                              // 2 pour 9V 3 pour 8V  4 pour Resolution de 6
@@ -69,18 +69,18 @@ uint32_t memMillisLight = 0;
 // uint16_t mvoltHot = 0;
 // uint16_t mvoltCold = 0;
 // uint16_t mvoltOut = 0;
-SimpleKalmanFilter filterVoltageHot(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
-SimpleKalmanFilter filterVoltageCold(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
-SimpleKalmanFilter filterVoltageOut(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
+// SimpleKalmanFilter filterVoltageHot(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
+// SimpleKalmanFilter filterVoltageCold(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
+// SimpleKalmanFilter filterVoltageOut(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
 
 
 float temperature;
 float humidity;
 float tempHot;
 float tempCold;
-float tempOut;
+// float tempOut;
 float tempDewPoint;
-float tempDewPoint2;
+// float tempDewPoint2;
 
 enum mode {
 	IDLE,
@@ -94,15 +94,17 @@ mode activeMode = mode::IDLE;
 
 TaskHandle_t pADCRead;
 void ADCRead( void * parameter){
-	const TickType_t taskPeriod = 10; // 20ms <--> 50Hz
+	SimpleKalmanFilter filterVoltageHot(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
+	SimpleKalmanFilter filterVoltageCold(MEASUREERROR, PROCESSNOISE); //10 Amplitude du bruit pour une résolution sur 9 bits 512
+	const TickType_t taskPeriod = 10;
 	TickType_t xLastWakeTime = xTaskGetTickCount();
 	for (;;)  {
 		// mvoltHot = (uint16_t)filterVoltageHot.updateEstimate(analogRead(TEMPHOT_PIN));
 		// mvoltCold = (uint16_t)filterVoltageCold.updateEstimate(analogRead(TEMPCOLD_PIN));
 		// mvoltOut = (uint16_t)filterVoltageOut.updateEstimate(analogRead(TEMPOUT_PIN));
-		tempHot = ADC_LUT[(uint16_t)filterVoltageHot.updateEstimate(analogRead(TEMPHOT_PIN))]/10;
-		tempCold = ADC_LUT[(uint16_t)filterVoltageCold.updateEstimate(analogRead(TEMPCOLD_PIN))]/10;
-		tempOut = ADC_LUT[(uint16_t)filterVoltageOut.updateEstimate(analogRead(TEMPOUT_PIN))]/10;
+		tempHot = (float)ADC_LUT[(uint16_t)filterVoltageHot.updateEstimate(analogRead(TEMPHOT_PIN))]/10;
+		tempCold = (float)ADC_LUT[(uint16_t)filterVoltageCold.updateEstimate(analogRead(TEMPCOLD_PIN))]/10;
+		// tempOut = ADC_LUT[(uint16_t)filterVoltageOut.updateEstimate(analogRead(TEMPOUT_PIN))]/10;
 
 		
 		vTaskDelayUntil(&xLastWakeTime, taskPeriod);
@@ -124,14 +126,15 @@ void sendToNR() {
 	if (millis() - memMillis > 300000 || pushJSON) {
 		memMillis = millis();
 		pushJSON = false;
-		sprintf(buffer, "{\"temperature\":%.1f,\"humidity\":%.1f,\"absHumidity\":%.1f,\"dewPoint\":%.1f,\"tempCold\":%.1f,\"tempHot\":%.1f,\"tempOut\":%.1f,\"coldFanSpeed\":%.1f}\0",
+		// sprintf(buffer, "{\"temperature\":%.1f,\"humidity\":%.1f,\"absHumidity\":%.1f,\"dewPoint\":%.1f,\"tempCold\":%.1f,\"tempHot\":%.1f,\"tempOut\":%.1f,\"coldFanSpeed\":%.1f}\0",
+		sprintf(buffer, "{\"temperature\":%.1f,\"humidity\":%.1f,\"absHumidity\":%.1f,\"dewPoint\":%.1f,\"tempCold\":%.1f,\"tempHot\":%.1f,\"coldFanSpeed\":%.1f}\0",
 				temperature,
 				humidity,
 				sht3x.computeAbsoluteHumidity(temperature, humidity),
 				tempDewPoint,
 				tempCold,
 				tempHot,
-				tempOut,
+				// tempOut,
 				activeMode==mode::MISTINESS ? pid.getI() : coldFanSpeed);
 		udpNR.beginPacket(WiFi.broadcastIP(), PORTNR);
 		udpNR.print(buffer);
@@ -363,14 +366,15 @@ void sendToTeleplot() {
 	static char buffer[300];
 	static WiFiUDP udpPlot;
 
-	sprintf(buffer, "temperature:%.2f\nhumidity:%.2f\ndewPoint:%.2f\ndewPoint2:%.2f\ntempCold:%.2f\ntempHot:%.2f\ntempOut:%.2f\nfanSpeed:%d\nTimerStop:%d\nPID_p:%.3f\nPID_i:%.3f\nPID_d:%.3f\nPID:%.3f\ndelta:%.3f\n",
+	// sprintf(buffer, "temperature:%.2f\nhumidity:%.2f\ndewPoint:%.2f\ndewPoint2:%.2f\ntempCold:%.2f\ntempHot:%.2f\ntempOut:%.2f\nfanSpeed:%d\nTimerStop:%d\nPID_p:%.3f\nPID_i:%.3f\nPID_d:%.3f\nPID:%.3f\ndelta:%.3f\n",
+	sprintf(buffer, "temperature:%.2f\nhumidity:%.2f\ndewPoint:%.2f\ntempCold:%.2f\ntempHot:%.2f\nfanSpeed:%d\nTimerStop:%d\nPID_p:%.3f\nPID_i:%.3f\nPID_d:%.3f\nPID:%.3f\ndelta:%.3f\n",
 			temperature,
 			humidity,
 			tempDewPoint,
-			tempDewPoint2,
+			// tempDewPoint2,
 			tempCold,
 			tempHot,
-			tempOut,
+			// tempOut,
 			coldFanSpeed,
 			(DELAY_STOP + memMillisStop - millis()) / 1000,
 			pid.getP(),
@@ -392,7 +396,7 @@ void setup() {
 	// Init pin
 	pinMode(TEMPCOLD_PIN, INPUT);
 	pinMode(TEMPHOT_PIN, INPUT);
-	pinMode(TEMPOUT_PIN, INPUT);
+	// pinMode(TEMPOUT_PIN, INPUT);
 	pinMode(HOTFAN_PIN, OUTPUT);
 	pinMode(PELTIER_PIN, OUTPUT);
 	pinMode(COLDFAN_PIN, OUTPUT);
@@ -433,7 +437,7 @@ void loop() {
 		temperature = data.TemperatureC;
 		// tempDewPoint = FilterDewPoint.updateEstimate(sht3x.computeDewPoint(temperature, humidity));
 		tempDewPoint = sht3x.computeDewPoint(temperature, humidity);
-		tempDewPoint2 = sht3x.computeDewPoint(tempOut, humidity);
+		// tempDewPoint2 = sht3x.computeDewPoint(tempOut, humidity);
 	} else {
 		DEBUGLOG("Failed to read Data\n");
 		setMode(mode::ERROR);
