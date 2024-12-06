@@ -155,7 +155,7 @@ void setColdFan(uint8_t fanSpeed) {
 		return;
 
 	coldFanSpeed = fanSpeed;
-	// ledcWrite(0, coldFanSpeed);
+	ledcWrite(0, coldFanSpeed);
 	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
