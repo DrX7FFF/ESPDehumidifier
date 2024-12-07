@@ -1,5 +1,3 @@
-//Version ColdFan
-
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <AsyncTCP.h>
@@ -32,10 +30,16 @@
 // #define T0 298.15    // Temperature in Kelvin for 25 degree Celsius
 // #define R0 100000    // Resistance of Thermistor at 25 degree Celsius 94kOhm
 // #define VSS 3300      // Tension MAX
-
+#define COLDFAN_PWM_CHANNEL 0
 #define COLDFAN_RESOLUTION 5                            // 6
 #define COLDFAN_SPEEDMIN 2                              // 2 pour 9V 3 pour 8V  4 pour Resolution de 6
 #define COLDFAN_SPEEDMAX (1 << COLDFAN_RESOLUTION) - 1  // 0x1F
+
+#define HOTFAN_PWM_CHANNEL 1
+#define HOTFAN_RESOLUTION 5
+#define HOTFAN_SPEEDMIN 10
+#define HOTFAN_SPEEDMAX (1 << HOTFAN_RESOLUTION) - 1
+#define HOTFAN_SPEEDFLOW HOTFAN_SPEEDMAX - 2
 
 // #define TEMPHOT_MAX 54
 #define TEMPHOT_MAX 60
@@ -56,6 +60,7 @@ PIDController pid(6, 0.06, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
 SimpleKalmanFilter FilterHumidity(0.2, 0.4);  // Très proche du réel et filtre les petites variations
 
 uint8_t coldFanSpeed = 0;
+uint8_t hotFanSpeed = 0;
 bool pushJSON = false;
 bool manu = false;
 bool teleplot = false;
@@ -155,7 +160,7 @@ void setColdFan(uint8_t fanSpeed) {
 		return;
 
 	coldFanSpeed = fanSpeed;
-	ledcWrite(0, coldFanSpeed);
+	ledcWrite(COLDFAN_PWM_CHANNEL, coldFanSpeed);
 	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
 }
 
@@ -185,11 +190,29 @@ void setPeltier(bool cmd) {
 	DEBUGLOG("Peltier : %s\n", digitalRead(PELTIER_PIN) ? "On" : "Off");
 }
 
-void setHotFan(bool cmd) {
-	if (cmd == digitalRead(HOTFAN_PIN))
+void setHotFan(uint8_t fanSpeed) {
+	if (fanSpeed > HOTFAN_SPEEDMAX)
+		fanSpeed = HOTFAN_SPEEDMAX;
+	if (fanSpeed < HOTFAN_SPEEDMIN)
+		fanSpeed = 0;
+	if (fanSpeed == hotFanSpeed)
 		return;
-	digitalWrite(HOTFAN_PIN, cmd);
-	DEBUGLOG("Hot fan : %s\n", digitalRead(HOTFAN_PIN) ? "On" : "Off");
+
+	hotFanSpeed = fanSpeed;
+	ledcWrite(HOTFAN_PWM_CHANNEL, hotFanSpeed);  // Utilise le canal 1 pour le hot fan
+	DEBUGLOG("Hot speed : %d\n", hotFanSpeed);
+}
+
+void upHotFan() {
+	if (hotFanSpeed == 0)
+		setHotFan(HOTFAN_SPEEDMAX);
+	else
+		setHotFan(hotFanSpeed + 1);
+}
+
+void downHotFan() {
+	if (hotFanSpeed > HOTFAN_SPEEDMIN)
+		setHotFan(hotFanSpeed - 1);
 }
 
 void displayMode() {
@@ -225,43 +248,43 @@ void setMode(mode newMode) {
 			memMillisIDLEMode = millis();
 			activeMode = newMode;
 			setPeltier(false);
-			setHotFan(false);
+			setHotFan(0);
 			setColdFan(0);
 			break;
 		case mode::FLOW:
 			memMillisFlowMode = millis();
 			activeMode = newMode;
 			setPeltier(false);
-			setHotFan(true);
+			setHotFan(HOTFAN_SPEEDFLOW);
 			setColdFan(COLDFAN_SPEEDMAX);
 			delay(1000);  // Attendre 1s que les fan démarrent
 			break;
 		case mode::MISTINESS:
 			activeMode = newMode;
 			setPeltier(true);
-			setHotFan(true);
+			setHotFan(HOTFAN_SPEEDMAX);
 			setColdFan(COLDFAN_SPEEDMAX);
 			delay(1000);  // Attendre 1s que les fan démarrent
 			break;
 		case mode::REFRESH:
 			activeMode = newMode;
 			setPeltier(false);
-			setHotFan(true);
+			setHotFan(HOTFAN_SPEEDMAX);
 			setColdFan(COLDFAN_SPEEDMAX);
 			delay(1000);  // Attendre 1s que les fan démarrent
 			break;
 		case mode::ERROR:
 			activeMode = newMode;
 			setPeltier(false);
-			setHotFan(false);
+			setHotFan(0);
 			setColdFan(0);
 		default:
 			break;
 	}
 	displayMode();
 	DEBUGLOG("Cold speed : %d\n", coldFanSpeed);
+	DEBUGLOG("Hot speed : %d\n", hotFanSpeed);
 }
-
 void onReceiveDebug(void *data, size_t len) {
 	// DEBUGLOG("Receive %d car %.*s\n", len, len, (char*)data);
 	switch (((char *)data)[0]) {
@@ -278,7 +301,13 @@ void onReceiveDebug(void *data, size_t len) {
 			setMode(mode::FLOW);
 			break;
 		case 'H':
-			setHotFan(!digitalRead(HOTFAN_PIN));
+			setHotFan(hotFanSpeed ? 0 : HOTFAN_SPEEDMAX);
+			break;
+		case '2':
+			downHotFan();
+			break;
+		case '3':
+			upHotFan();
 			break;
 		case 'P':
 			setPeltier(!digitalRead(PELTIER_PIN));
@@ -287,10 +316,7 @@ void onReceiveDebug(void *data, size_t len) {
 			pushJSON = true;
 			break;
 		case 'C':
-			if (coldFanSpeed)
-				setColdFan(0);
-			else
-				setColdFan(COLDFAN_SPEEDMAX);
+			setColdFan(coldFanSpeed ? 0 : COLDFAN_SPEEDMAX);
 			break;
 		case '+':
 			upColdFan();
@@ -351,10 +377,8 @@ void onReceiveDebug(void *data, size_t len) {
 			DEBUGLOG("J        Push JSON\n");
 			DEBUGLOG("I        Init sht3x\n");
 			DEBUGLOG("O        Restart ESP\n");
-			DEBUGLOG("+        Cold Up\n");
-			DEBUGLOG("-        Cold Down\n");
-			DEBUGLOG("C        Cold fan swap\t\t[%d]\n", coldFanSpeed);
-			DEBUGLOG("H        Hot fan swap\t\t[%s]\n", digitalRead(HOTFAN_PIN) ? "On" : "Off");
+			DEBUGLOG("C - +    Cold fan swap\t\t[%d]\n", coldFanSpeed);
+			DEBUGLOG("H 2 3    Hot fan swap\t\t[%d]\n", hotFanSpeed);
 			DEBUGLOG("P        Peltier swap\t\t[%s]\n", digitalRead(PELTIER_PIN) ? "On" : "Off");
 			DEBUGLOG("L        Light swap\t\t[%s]\n", digitalRead(LIGHT_PIN) ? "On" : "Off");
 			DEBUGLOG("M        Manu, no PID\t\t[%s]\n", manu ? "On" : "Off");
@@ -408,10 +432,13 @@ void setup() {
 	pinMode(COLDFAN_PIN, OUTPUT);
 	pinMode(LIGHT_PIN, OUTPUT);
 	setLight(false);
-	ledcSetup(0, 25000, COLDFAN_RESOLUTION);
-	ledcAttachPin(COLDFAN_PIN, 0);
+	ledcSetup(COLDFAN_PWM_CHANNEL, 25000, COLDFAN_RESOLUTION);
+	ledcAttachPin(COLDFAN_PIN, COLDFAN_PWM_CHANNEL);
 	// digitalWrite(COLDFAN_PIN, false);
-
+    // Dans setup(), après l'initialisation du cold fan
+    ledcSetup(HOTFAN_PWM_CHANNEL , 25000, HOTFAN_RESOLUTION);  // Canal 1 pour hot fan
+    ledcAttachPin(HOTFAN_PIN, HOTFAN_PWM_CHANNEL);
+	
 	Wire.setPins(SHT_SDA, SHT_SCL);
 	if (sht3x.begin() != 0)
 		DEBUGLOG("Failed to Initialize the chip....\n");
