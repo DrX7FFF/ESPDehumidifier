@@ -50,7 +50,7 @@
 #define DELAY_REFLOW 18000000  // 5H
 #define DELAY_LIGHT	60000	// 2 minutes
 
-#define DEWPOINT_OFFSET -1
+#define DEWPOINT_OFFSET -5
 
 DFRobot_SHT3x sht3x;
 PIDController pid(6, 0.06, 0, COLDFAN_SPEEDMIN, COLDFAN_SPEEDMAX);
@@ -479,8 +479,8 @@ void loop() {
 	// Traitement du mode
 	switch (activeMode) {
 		case mode::IDLE:
-			if (millis() - memMillisIDLEMode > DELAY_REFLOW)
-				setMode(mode::FLOW);
+			// if (millis() - memMillisIDLEMode > DELAY_REFLOW)
+			// 	setMode(mode::FLOW);
 			break;
 		case mode::FLOW:
 			if (millis() - memMillisFlowMode > DELAY_FLOW)
